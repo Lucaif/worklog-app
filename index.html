@@ -59,11 +59,14 @@
 </head>
 <body>
 <div id="app"></div>
-<script>
-"use strict";
+<script type="module">
+import { h, render, Fragment } from "https://esm.sh/preact@10.22.0";
+import { useState, useEffect, useMemo, useRef } from "https://esm.sh/preact@10.22.0/hooks";
+import htm from "https://esm.sh/htm@3.1.1";
+const html = htm.bind(h);
 
 // ── i18n ──────────────────────────────────────────────────────────────────────
-var LANGS = {
+const LANGS = {
   es: {
     appName:"WorkLog",projects:"Proyectos",noProjects:"Sin proyectos",
     noProjectsHint:"Crea tu primer proyecto para empezar a registrar horas",
@@ -97,7 +100,14 @@ var LANGS = {
     pause:"⏸ Pausar",resumeWork:"▶ Continuar",statusPaused:"En pausa",pausedTime:"Pausas",
     fullName:"Nombre y apellidos",fullNameHint:"Aparecerá en los informes exportados",
     exportReport:"📄 Exportar informe",exportReportHint:"Genera un resumen de texto del proyecto",
-    identity:"Identificación"
+    identity:"Identificación",
+    rptEntry:"Entrada",rptExit:"Salida",rptLunch:"Comida",rptPause:"Pausa",rptNote:"Nota",
+    rptSummary:"RESUMEN",rptTotalLine:"TOTAL",rptPenaltyLunch:"Penalty Lunch",
+    storageErrQuota:"Almacenamiento lleno — los cambios no se guardaron",
+    storageErrSave:"Error al guardar — los cambios no se guardaron",
+    importErrShape:"Archivo no válido: estructura incorrecta",
+    pauseTitle:"Pausa",pauseAdd:"+ Añadir",pauseNone:"Sin pausas registradas",
+    pauseStart:"Inicio",pauseEnd:"Fin"
   },
   en: {
     appName:"WorkLog",projects:"Projects",noProjects:"No projects",
@@ -132,7 +142,14 @@ var LANGS = {
     pause:"⏸ Pause",resumeWork:"▶ Resume",statusPaused:"Paused",pausedTime:"Pauses",
     fullName:"Full name",fullNameHint:"Will appear in exported reports",
     exportReport:"📄 Export report",exportReportHint:"Generate a text summary of the project",
-    identity:"Identity"
+    identity:"Identity",
+    rptEntry:"Entry",rptExit:"Exit",rptLunch:"Lunch",rptPause:"Break",rptNote:"Note",
+    rptSummary:"SUMMARY",rptTotalLine:"TOTAL",rptPenaltyLunch:"Penalty Lunch",
+    storageErrQuota:"Storage full — changes were not saved",
+    storageErrSave:"Save error — changes were not saved",
+    importErrShape:"Invalid file: malformed structure",
+    pauseTitle:"Break",pauseAdd:"+ Add",pauseNone:"No breaks recorded",
+    pauseStart:"Start",pauseEnd:"End"
   },
   de: {
     appName:"WorkLog",projects:"Projekte",noProjects:"Keine Projekte",
@@ -167,925 +184,1059 @@ var LANGS = {
     pause:"⏸ Pause",resumeWork:"▶ Weiter",statusPaused:"Pausiert",pausedTime:"Pausen",
     fullName:"Vor- und Nachname",fullNameHint:"Erscheint in exportierten Berichten",
     exportReport:"📄 Bericht exportieren",exportReportHint:"Textzusammenfassung des Projekts erstellen",
-    identity:"Identitaet"
+    identity:"Identitaet",
+    rptEntry:"Beginn",rptExit:"Ende",rptLunch:"Mittag",rptPause:"Pause",rptNote:"Notiz",
+    rptSummary:"ZUSAMMENFASSUNG",rptTotalLine:"GESAMT",rptPenaltyLunch:"Penalty Lunch",
+    storageErrQuota:"Speicher voll — Aenderungen nicht gespeichert",
+    storageErrSave:"Speicherfehler — Aenderungen nicht gespeichert",
+    importErrShape:"Ungueltige Datei: falsche Struktur",
+    pauseTitle:"Pause",pauseAdd:"+ Hinzu",pauseNone:"Keine Pausen erfasst",
+    pauseStart:"Beginn",pauseEnd:"Ende"
   }
 };
 
 // ── Utils ─────────────────────────────────────────────────────────────────────
 function uid() { return Math.random().toString(36).slice(2, 9); }
-function toMin(s) { if (!s) return 0; var p = s.split(":"); return parseInt(p[0]) * 60 + parseInt(p[1]); }
-function nowTime() { var d = new Date(); return pad(d.getHours()) + ":" + pad(d.getMinutes()); }
 function pad(n) { return String(n).padStart(2, "0"); }
+function toMin(s) { if (!s) return 0; const p = s.split(":"); return parseInt(p[0]) * 60 + parseInt(p[1]); }
+function nowTime() { const d = new Date(); return pad(d.getHours()) + ":" + pad(d.getMinutes()); }
 function todayStr() { return new Date().toISOString().split("T")[0]; }
 function getLocale(lang) { return lang === "en" ? "en-GB" : lang === "de" ? "de-DE" : "es-ES"; }
 function fmtDate(s, lang) { try { return new Date(s + "T12:00:00").toLocaleDateString(getLocale(lang), {weekday:"long",day:"numeric",month:"long"}); } catch(e) { return s; } }
 function fmtDateShort(s, lang) { try { return new Date(s + "T12:00:00").toLocaleDateString(getLocale(lang), {weekday:"short",day:"numeric",month:"short"}); } catch(e) { return s; } }
 function fmtDur(min) { if (min == null || min < 0) return "--"; return Math.floor(min/60) + "h " + pad(min%60) + "m"; }
-function fmtH(min) { return Math.round(min/60) + "h"; }
+function fmtH(min) { if (min == null || min < 0) return "--"; const h = Math.floor(min/60), m = min%60; return m === 0 ? h + "h" : h + "h " + pad(m) + "m"; }
+
 function getDayStatus(day) {
   if (!day || !day.workStart) return "idle";
   if (day.workEnd) return "complete";
   if (day.lunchEnd) return "resumed";
   if (day.lunchStart) return "lunch";
-  // pauses: array of {start, end}
-  var pauses = day.pauses || [];
-  var lastPause = pauses[pauses.length - 1];
+  const pauses = day.pauses || [];
+  const lastPause = pauses[pauses.length - 1];
   if (lastPause && !lastPause.end) return "paused";
   return "working";
 }
+
 function calcBreakdown(day, s) {
   if (!day || !day.workStart || !day.workEnd) return null;
-  var gross = toMin(day.workEnd) - toMin(day.workStart);
-  if (gross < 0) gross += 1440; // crossed midnight
+  const workCrossesMidnight = toMin(day.workEnd) < toMin(day.workStart);
+  let gross = toMin(day.workEnd) - toMin(day.workStart);
+  if (gross < 0) gross += 1440;
   if (gross < 0) gross = 0;
-  // deduct completed pauses
-  var pauses = day.pauses || [];
-  var pausedMin = 0;
-  pauses.forEach(function(p) {
+  if (gross > 1440) gross = 1440;
+  const pauses = day.pauses || [];
+  let pausedMin = 0;
+  pauses.forEach(p => {
     if (p.start && p.end) {
-      var d = toMin(p.end) - toMin(p.start);
-      if (d < 0) d += 1440;
+      let d = toMin(p.end) - toMin(p.start);
+      if (d < 0) d = workCrossesMidnight ? d + 1440 : 0;
       if (d > 0) pausedMin += d;
     }
   });
-  var net = Math.max(0, gross - pausedMin);
-  var nm = (s.workdayHours || 10) * 60;
-  var normal = Math.min(net, nm);
-  var extra = Math.max(0, net - nm);
-  var bonus = day.applyLunchPenalty === true ? (s.lunchPenaltyH || 1) * 60 : 0;
-  return { gross:gross, pausedMin:pausedMin, net:net, normal:normal, extra:extra, bonus:bonus, total:net+bonus };
+  const net = Math.max(0, gross - pausedMin);
+  const nm = (s.workdayHours || 10) * 60;
+  const normal = Math.min(net, nm);
+  const extra = Math.max(0, net - nm);
+  const bonus = day.applyLunchPenalty === true ? (s.lunchPenaltyH || 1) * 60 : 0;
+  return { gross, pausedMin, net, normal, extra, bonus, total: net + bonus };
 }
-
-// ── Storage ───────────────────────────────────────────────────────────────────
-var DATA_KEY = "wt-data";
-var SETT_KEY = "wt-settings";
-var DEF_DATA = { projects: [] };
-var DEF_SETT = { lang:"es", workdayHours:10, lunchPenaltyH:1, fullName:"" };
-
-function stSave(key, val) { try { localStorage.setItem(key, JSON.stringify(val)); } catch(e) {} }
-function stLoad(key, def) { try { var v = localStorage.getItem(key); return v ? Object.assign({}, def, JSON.parse(v)) : def; } catch(e) { return def; } }
-
-// ── State ─────────────────────────────────────────────────────────────────────
-var S = {
-  data: stLoad(DATA_KEY, DEF_DATA),
-  settings: stLoad(SETT_KEY, DEF_SETT),
-  view: "projects",
-  activeProjId: null,
-  editDay: null,
-  showNewProj: false,
-  newProjName: "",
-  confirmDelete: null,
-  renameProj: null,
-  commentDay: null,   // { projId, dayId, text }
-  draftSett: null,
-  importMsg: null,
-  clock: nowTime()
-};
-
-function set(patch) {
-  Object.assign(S, patch);
-  render();
-}
-function persist(data) { S.data = data; stSave(DATA_KEY, data); }
-function persistSett(sett) { S.settings = sett; stSave(SETT_KEY, sett); }
-
-setInterval(function() { S.clock = nowTime(); render(); }, 15000);
-
-// ── DOM helpers ───────────────────────────────────────────────────────────────
-function el(tag, attrs, children) {
-  var node = document.createElement(tag);
-  if (attrs) {
-    Object.keys(attrs).forEach(function(k) {
-      var v = attrs[k];
-      if (k === "style") { Object.assign(node.style, v); }
-      else if (k === "class") { node.className = v; }
-      else if (k === "onClick") { node.addEventListener("click", v); }
-      else if (k === "onChange") { node.addEventListener("change", v); }
-      else if (k === "onInput") { node.addEventListener("input", v); }
-      else if (k === "onKeyDown") { node.addEventListener("keydown", v); }
-      else { node[k] = v; }
-    });
-  }
-  if (children) {
-    (Array.isArray(children) ? children : [children]).forEach(function(c) {
-      if (c == null) return;
-      node.appendChild(typeof c === "string" || typeof c === "number" ? document.createTextNode(String(c)) : c);
-    });
-  }
-  return node;
-}
-function div(a, c) { return el("div", a, c); }
-function span(a, c) { return el("span", a, c); }
-function btn(a, c) { return el("button", a, c); }
-function inp(a) { return el("input", a); }
-function txt(s) { return document.createTextNode(String(s)); }
-
-function lbl(text) {
-  return span({"class":"lbl"}, [text]);
-}
-
-function Btn(cls, text, onClick, extraStyle) {
-  var b = btn({"class":"btn btn-"+cls, "onClick":onClick}, [text]);
-  if (extraStyle) Object.assign(b.style, extraStyle);
-  return b;
-}
-
-function Badge(status, t) {
-  var cfg = {
-    idle:     [t.statusIdle,     "rgba(238,238,245,0.38)", "rgba(238,238,245,0.05)"],
-    working:  [t.statusWorking,  "#5ED5B7",                "rgba(94,213,183,0.1)"],
-    lunch:    [t.statusLunch,    "#FFB547",                "rgba(255,181,71,0.1)"],
-    resumed:  [t.statusResumed,  "#5ED5B7",                "rgba(94,213,183,0.1)"],
-    paused:   [t.statusPaused,   "#FFB547",                "rgba(255,181,71,0.1)"],
-    complete: [t.statusComplete, "#4DFF8A",                "rgba(77,255,138,0.1)"]
-  }[status] || [status, "rgba(238,238,245,0.38)", "transparent"];
-  return span({"class":"badge", style:{background:cfg[2],color:cfg[1]}}, [cfg[0]]);
-}
-
-function Chip(label, value, color, bg) {
-  if (!value) return null;
-  var c = div({"class":"chip", style:{background:bg||"rgba(255,255,255,0.05)"}});
-  c.appendChild(div({"class":"chip-l"}, [label]));
-  c.appendChild(div({"class":"chip-v", style:{color:color||"#EEEEF5"}}, [value]));
-  return c;
-}
-
-function Stepper(val, onMinus, onPlus) {
-  var row = div({"class":"stepper"});
-  row.appendChild(btn({"class":"stepper-btn","onClick":onMinus}, ["-"]));
-  row.appendChild(div({"class":"stepper-val"}, [String(val)]));
-  row.appendChild(btn({"class":"stepper-btn","onClick":onPlus}, ["+"]));
-  return row;
-}
-
-function BreakdownEl(bk, t, settings) {
-  if (!bk) return null;
-  var wrap = div({style:{background:"rgba(0,0,0,0.25)",borderRadius:"12px",border:"1px solid rgba(255,255,255,0.07)",overflow:"hidden",marginTop:"10px"}});
-  wrap.appendChild(div({style:{padding:"10px 14px 6px"}}, [lbl(t.hoursBreakdown)]));
-  var tbl = el("table");
-  var tb = el("tbody");
-  var rows = [
-    [t.normalHours,  fmtDur(bk.normal), "#5ED5B7",  false],
-    [t.overtime,     bk.extra>0 ? fmtDur(bk.extra) : "--", "#FF5C3A", false],
-    [t.pausedTime,   bk.pausedMin>0 ? "−"+fmtDur(bk.pausedMin) : "--", "#FFB547", false],
-    [t.noLunchBonus+" (+"+settings.lunchPenaltyH+"h)", bk.bonus>0 ? "+"+fmtH(bk.bonus) : "--", "#A78BFF", false],
-    [t.net,          fmtDur(bk.total),    "#EEEEF5",  true]
-  ];
-  rows.forEach(function(row) {
-    var tr = el("tr");
-    var td1 = el("td", {style:{color:"rgba(238,238,245,0.62)",fontWeight:row[3]?"700":"400"}}, [row[0]]);
-    var td2 = el("td", {style:{fontFamily:"'JetBrains Mono',monospace",fontWeight:"700",color:row[2],textAlign:"right",fontSize:row[3]?"16px":"14px"}}, [row[1]]);
-    tr.appendChild(td1); tr.appendChild(td2); tb.appendChild(tr);
-  });
-  tbl.appendChild(tb); wrap.appendChild(tbl);
-  return wrap;
-}
-
-// ── Upsert day ────────────────────────────────────────────────────────────────
-function upsertDay(projId, day) {
-  var nd = Object.assign({}, S.data, {
-    projects: S.data.projects.map(function(p) {
-      if (p.id !== projId) return p;
-      var exists = p.days.some(function(d) { return d.id === day.id; });
-      return Object.assign({}, p, {
-        days: exists ? p.days.map(function(d) { return d.id === day.id ? day : d; }) : p.days.concat([day])
-      });
-    })
-  });
-  persist(nd);
-  render();
-}
-
-function tapAction(action) {
-  var proj = S.data.projects.find(function(p) { return p.id === S.activeProjId; });
-  if (!proj) return;
-  var time = nowTime(), today = todayStr();
-  var existing = proj.days.find(function(d) { return d.date === today; });
-  var base = existing || { id:uid(), date:today, workStart:null, lunchStart:null, lunchEnd:null, workEnd:null, pauses:[] };
-  var day = Object.assign({}, base, {pauses: (base.pauses || []).slice()});
-
-  if (action === "pause") {
-    day.pauses.push({start: time, end: null});
-  } else if (action === "resumePause") {
-    var last = day.pauses[day.pauses.length - 1];
-    if (last && !last.end) {
-      day.pauses[day.pauses.length - 1] = Object.assign({}, last, {end: time});
-    }
-  } else {
-    var upd = {start:{workStart:time},lunch:{lunchStart:time},resume:{lunchEnd:time},end:{workEnd:time}}[action] || {};
-    Object.assign(day, upd);
-  }
-  upsertDay(proj.id, day);
-}
-
-// ── Comment button helper ─────────────────────────────────────────────────────
-function CommentBtn(projId, day, t) {
-  var hasComment = !!(day && day.comment && day.comment.trim());
-  var b = btn({
-    style:{
-      background: hasComment ? "rgba(167,139,255,0.15)" : "rgba(255,255,255,0.05)",
-      border: "1px solid " + (hasComment ? "rgba(167,139,255,0.35)" : "rgba(255,255,255,0.07)"),
-      borderRadius:"8px", color: hasComment ? "#A78BFF" : "rgba(238,238,245,0.38)",
-      fontSize:"13px", cursor:"pointer", padding:"4px 10px", lineHeight:"1.4",
-      display:"flex", alignItems:"center", gap:"4px"
-    },
-    "onClick": function(e) {
-      e.stopPropagation();
-      set({commentDay:{projId:projId, dayId:day.id, text:day.comment||""}});
-    }
-  }, [hasComment ? "💬" : "💬"]);
-  if (hasComment) b.appendChild(span({style:{width:"6px",height:"6px",borderRadius:"50%",background:"#A78BFF",display:"inline-block"}}));
-  return b;
-}
-
-// ── Comment popup ─────────────────────────────────────────────────────────────
-function renderCommentPopup(root) {
-  if (!S.commentDay) return;
-  var t = LANGS[S.settings.lang] || LANGS.es;
-  var cd = S.commentDay;
-
-  var ov = div({"class":"overlay"});
-  var pop = div({"class":"card popup"});
-  pop.appendChild(el("div",{"class":"fd",style:{fontSize:"18px",marginBottom:"14px"}},[t.comment]));
-
-  var ta = el("textarea",{
-    style:{
-      width:"100%", background:"rgba(255,255,255,0.05)", border:"1px solid rgba(255,255,255,0.07)",
-      borderRadius:"10px", padding:"12px 14px", color:"#EEEEF5", fontSize:"15px",
-      fontFamily:"inherit", outline:"none", resize:"none", minHeight:"100px",
-      colorScheme:"dark", marginBottom:"14px", boxSizing:"border-box"
-    },
-    placeholder: t.addComment
-  });
-  ta.value = cd.text || "";
-  ta.addEventListener("input", function(e) { S.commentDay = Object.assign({},S.commentDay,{text:e.target.value}); });
-
-  pop.appendChild(ta);
-  var row = div({"class":"flex-row"});
-  row.appendChild(Btn("g", t.cancel, function() { set({commentDay:null}); }, {flex:"1"}));
-  row.appendChild(Btn("p", t.saveComment, function() {
-    var nd = Object.assign({},S.data,{projects:S.data.projects.map(function(p){
-      if (p.id!==cd.projId) return p;
-      return Object.assign({},p,{days:p.days.map(function(d){
-        if (d.id!==cd.dayId) return d;
-        return Object.assign({},d,{comment:S.commentDay.text.trim()||null});
-      })});
-    })});
-    persist(nd);
-    set({commentDay:null});
-  }, {flex:"1"}));
-  pop.appendChild(row);
-  ov.appendChild(pop);
-  root.appendChild(ov);
-  setTimeout(function(){ ta.focus(); }, 50);
-}
-
 
 function generateReportText(proj, settings) {
-  var t = LANGS[settings.lang] || LANGS.es;
-  var locale = getLocale(settings.lang);
-  var days = proj.days.filter(function(d){return d.workStart;}).sort(function(a,b){return a.date.localeCompare(b.date);});
-  var bks = days.map(function(d){return calcBreakdown(d,settings);});
-  var totNet = 0, totNormal = 0, totExtra = 0, totBonus = 0;
-  bks.forEach(function(b){if(b){totNet+=b.total;totNormal+=b.normal;totExtra+=b.extra;totBonus+=b.bonus;}});
+  const t = LANGS[settings.lang] || LANGS.es;
+  const locale = getLocale(settings.lang);
+  const days = proj.days.filter(d => d.workStart).sort((a, b) => a.date.localeCompare(b.date));
+  const bks = days.map(d => calcBreakdown(d, settings));
+  let totNet = 0, totNormal = 0, totExtra = 0, totBonus = 0;
+  bks.forEach(b => { if (b) { totNet += b.total; totNormal += b.normal; totExtra += b.extra; totBonus += b.bonus; } });
 
-  var lines = [];
+  const lines = [];
   if (settings.fullName) lines.push(settings.fullName);
   lines.push(proj.name);
   lines.push("");
   lines.push("─".repeat(36));
 
-  days.forEach(function(day, i) {
-    var bk = bks[i];
-    var dateStr = new Date(day.date+"T12:00:00").toLocaleDateString(locale, {weekday:"long",day:"numeric",month:"long",year:"numeric"});
+  const padLabel = (s, len) => s.length >= len ? s + " " : s + " ".repeat(len - s.length);
+  const labelLen = Math.max(
+    t.rptEntry.length, t.rptExit.length, t.rptLunch.length, t.rptPause.length,
+    t.normalHours.length, t.overtime.length, t.rptPenaltyLunch.length, t.rptTotalLine.length
+  ) + 2;
+
+  days.forEach((day, i) => {
+    const bk = bks[i];
+    const dateStr = new Date(day.date + "T12:00:00").toLocaleDateString(locale, {weekday:"long",day:"numeric",month:"long",year:"numeric"});
     lines.push("");
     lines.push(dateStr.charAt(0).toUpperCase() + dateStr.slice(1));
-    lines.push("  Entrada:  " + (day.workStart || "--"));
-    lines.push("  Salida:   " + (day.workEnd   || "--"));
-    if (day.lunchStart) lines.push("  Comida:   " + day.lunchStart + " – " + (day.lunchEnd||"?"));
-    var pauses = day.pauses || [];
-    var completedPauses = pauses.filter(function(p){return p.start && p.end;});
-    if (completedPauses.length > 0) {
-      completedPauses.forEach(function(p, pi) {
-        lines.push("  Pausa "+(pi+1)+":  " + p.start + " – " + p.end);
-      });
-    }
+    lines.push("  " + padLabel(t.rptEntry + ":", labelLen) + (day.workStart || "--"));
+    lines.push("  " + padLabel(t.rptExit + ":",  labelLen) + (day.workEnd   || "--"));
+    if (day.lunchStart) lines.push("  " + padLabel(t.rptLunch + ":", labelLen) + day.lunchStart + " – " + (day.lunchEnd || "?"));
+    const pauses = day.pauses || [];
+    const completedPauses = pauses.filter(p => p.start && p.end);
+    completedPauses.forEach((p, pi) => {
+      lines.push("  " + padLabel(t.rptPause + " " + (pi + 1) + ":", labelLen) + p.start + " – " + p.end);
+    });
     if (day.applyLunchPenalty && settings.lunchPenaltyH > 0) {
-      lines.push("  Penalty Lunch: +" + settings.lunchPenaltyH + "h");
+      lines.push("  " + padLabel(t.rptPenaltyLunch + ":", labelLen) + "+" + fmtH(settings.lunchPenaltyH * 60));
     }
     if (bk) {
       lines.push("  ─────────────────────");
-      lines.push("  Total:     " + fmtDur(bk.total));
+      lines.push("  " + padLabel(t.total + ":", labelLen) + fmtDur(bk.total));
     }
-    if (day.comment) lines.push("  Nota: " + day.comment);
+    if (day.comment) lines.push("  " + t.rptNote + ": " + day.comment);
   });
 
   lines.push("");
   lines.push("─".repeat(36));
-  lines.push("RESUMEN");
-  lines.push("  Horas trabajadas: " + fmtDur(totNormal));
-  if (totExtra > 0)  lines.push("  Horas extra:      " + fmtDur(totExtra));
-  if (totBonus > 0)  lines.push("  Penalty Lunch:    +" + fmtH(totBonus));
-  lines.push("  TOTAL:            " + fmtDur(totNet));
+  lines.push(t.rptSummary);
+  lines.push("  " + padLabel(t.normalHours + ":",    labelLen) + fmtDur(totNormal));
+  if (totExtra > 0) lines.push("  " + padLabel(t.overtime + ":",       labelLen) + fmtDur(totExtra));
+  if (totBonus > 0) lines.push("  " + padLabel(t.rptPenaltyLunch + ":", labelLen) + "+" + fmtH(totBonus));
+  lines.push("  " + padLabel(t.rptTotalLine + ":",   labelLen) + fmtDur(totNet));
   lines.push("─".repeat(36));
-
   return lines.join("\n");
 }
 
-function renderSettings() {
-  var ds = S.draftSett || S.settings;
-  var t = LANGS[S.settings.lang] || LANGS.es;
-  function upd(patch) { S.draftSett = Object.assign({}, ds, patch); render(); }
+// ── Storage ───────────────────────────────────────────────────────────────────
+const DATA_KEY = "wt-data";
+const SETT_KEY = "wt-settings";
+const DATA_VERSION = 1;
+const DEF_DATA = { version: DATA_VERSION, projects: [] };
+const DEF_SETT = { lang:"es", workdayHours:10, lunchPenaltyH:1, fullName:"" };
 
-  var root = div({"class":"app"});
-  var hdr = div({"class":"hdr"});
-  hdr.appendChild(Btn("g", t.back, function() { S.draftSett=null; set({view: S.activeProjId?"project":"projects"}); }));
-  hdr.appendChild(span({"class":"fd", style:{fontSize:"17px"}}, [t.settingsTitle]));
-  hdr.appendChild(div({style:{width:"80px"}}));
-  root.appendChild(hdr);
+function migrateData(d) {
+  if (!d || typeof d !== "object" || !Array.isArray(d.projects)) return DEF_DATA;
+  return Object.assign({}, DEF_DATA, d, { version: DATA_VERSION });
+}
 
-  var sec = div({"class":"sec"});
+function stSave(key, val) {
+  try { localStorage.setItem(key, JSON.stringify(val)); return { ok: true }; }
+  catch (e) {
+    const isQuota = e && (e.name === "QuotaExceededError" || e.code === 22);
+    return { ok: false, errorType: isQuota ? "quota" : "save" };
+  }
+}
 
-  // Language
-  var langCard = div({"class":"card"});
-  langCard.appendChild(div({style:{marginBottom:"12px"}}, [lbl(t.language)]));
-  var langRow = div({"class":"flex-row"});
-  [["es","🇪🇸 Español"],["en","🇬🇧 English"],["de","🇩🇪 Deutsch"]].forEach(function(pair) {
-    var l = pair[0], label = pair[1];
-    var b = btn({
-      "class":"btn",
-      style:{flex:"1",background:ds.lang===l?"#FF5C3A":"rgba(255,255,255,0.05)",color:ds.lang===l?"#fff":"rgba(238,238,245,0.62)",border:ds.lang===l?"none":"1px solid rgba(255,255,255,0.07)"},
-      "onClick":function() { upd({lang:l}); }
-    }, [label]);
-    langRow.appendChild(b);
-  });
-  langCard.appendChild(langRow);
-  sec.appendChild(langCard);
+function stLoad(key, def) {
+  try {
+    const v = localStorage.getItem(key);
+    if (!v) return def;
+    const parsed = JSON.parse(v);
+    if (key === DATA_KEY) return migrateData(parsed);
+    return Object.assign({}, def, parsed);
+  } catch (e) { return def; }
+}
 
-  // Full name
-  var nameCard = div({"class":"card"});
-  nameCard.appendChild(div({style:{marginBottom:"4px"}}, [lbl(t.identity)]));
-  nameCard.appendChild(div({style:{fontSize:"12px",color:"rgba(238,238,245,0.38)",marginBottom:"12px"}}, [t.fullNameHint]));
-  var nameInp = inp({"class":"input-std", placeholder:t.fullName, value:ds.fullName||""});
-  nameInp.addEventListener("input", function(e) { upd({fullName:e.target.value}); });
-  nameCard.appendChild(nameInp);
-  sec.appendChild(nameCard);
+function isValidImport(parsed) {
+  if (!parsed || typeof parsed !== "object") return false;
+  const d = parsed.data;
+  if (!d || !Array.isArray(d.projects)) return false;
+  return d.projects.every(p =>
+    p && typeof p.id === "string" && typeof p.name === "string" && Array.isArray(p.days)
+    && p.days.every(day => day && typeof day.id === "string" && typeof day.date === "string")
+  );
+}
 
-  // Workday
-  var wdCard = div({"class":"card"});
-  wdCard.appendChild(div({style:{marginBottom:"4px"}}, [lbl(t.workdayHours)]));
-  wdCard.appendChild(div({style:{fontSize:"12px",color:"rgba(238,238,245,0.38)",marginBottom:"14px"}}, [t.overtimeHint]));
-  var wdRow = div({style:{display:"flex",justifyContent:"space-between",alignItems:"center"}});
-  wdRow.appendChild(span({style:{fontSize:"15px",color:"rgba(238,238,245,0.62)"}}, ["("+(ds.workdayHours-1)+"h + 1h)"]));
-  wdRow.appendChild(Stepper(ds.workdayHours,
-    function() { upd({workdayHours:Math.max(1, parseFloat((ds.workdayHours-0.5).toFixed(1)))}); },
-    function() { upd({workdayHours:Math.min(24, parseFloat((ds.workdayHours+0.5).toFixed(1)))}); }
-  ));
-  wdCard.appendChild(wdRow);
-  sec.appendChild(wdCard);
+// ── Atomic components ─────────────────────────────────────────────────────────
+const Lbl = ({ children }) => html`<span class="lbl">${children}</span>`;
 
-  // Lunch penalty
-  var lpCard = div({"class":"card"});
-  lpCard.appendChild(div({style:{marginBottom:"4px"}}, [lbl(t.lunchPenaltyMin)]));
-  lpCard.appendChild(div({style:{fontSize:"12px",color:"rgba(238,238,245,0.38)",marginBottom:"14px"}}, [t.lunchPenaltyHint]));
-  var lpRow = div({style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"14px"}});
-  lpRow.appendChild(span({style:{fontSize:"15px",color:"rgba(238,238,245,0.62)"}}, [ds.lunchPenaltyH+"h"]));
-  lpRow.appendChild(Stepper(ds.lunchPenaltyH,
-    function() { upd({lunchPenaltyH:Math.max(0, parseFloat((ds.lunchPenaltyH-0.5).toFixed(1)))}); },
-    function() { upd({lunchPenaltyH:Math.min(4, parseFloat((ds.lunchPenaltyH+0.5).toFixed(1)))}); }
-  ));
-  lpCard.appendChild(lpRow);
-  var lpInfo = div({style:{background:"rgba(94,213,183,0.1)",borderRadius:"10px",padding:"10px 13px"}});
-  var infoText = ds.lunchPenaltyH===0 ? "Sin Penalty Lunch configurado." : "Se aplicará Penalty Lunch de "+ds.lunchPenaltyH+"h si no se para a comer.";
-  lpInfo.appendChild(div({style:{fontSize:"12px",color:"#5ED5B7"}}, [infoText]));
-  if (ds.lunchPenaltyH > 0) lpInfo.appendChild(div({style:{fontSize:"13px",fontFamily:"'JetBrains Mono',monospace",fontWeight:"700",color:"#5ED5B7",marginTop:"4px"}}, ["= +"+ds.lunchPenaltyH+"h"]));
-  lpCard.appendChild(lpInfo);
-  sec.appendChild(lpCard);
+const Btn = ({ kind = "g", onClick, style, children }) =>
+  html`<button class=${"btn btn-" + kind} style=${style || {}} onClick=${onClick}>${children}</button>`;
 
-  // Backup
-  var bkCard = div({"class":"card"});
-  bkCard.appendChild(div({style:{marginBottom:"14px"}}, [lbl(t.dataBackup)]));
-  bkCard.appendChild(div({style:{fontSize:"12px",color:"rgba(238,238,245,0.38)",marginBottom:"10px"}}, [t.exportHint]));
-  var expBtn = Btn("g", "⬇ "+t.exportData, function() {
-    var payload = {version:1, exportedAt:new Date().toISOString(), data:S.data, settings:S.settings};
-    var blob = new Blob([JSON.stringify(payload,null,2)], {type:"application/json"});
-    var url = URL.createObjectURL(blob);
-    var a = document.createElement("a"); a.href=url; a.download="worktracker-backup-"+todayStr()+".json"; a.click(); URL.revokeObjectURL(url);
-  }, {width:"100%",fontSize:"14px"});
-  bkCard.appendChild(expBtn);
-  bkCard.appendChild(div({"class":"div-line", style:{margin:"14px 0"}}));
-  bkCard.appendChild(div({style:{fontSize:"12px",color:"rgba(238,238,245,0.38)",marginBottom:"10px"}}, [t.importHint]));
-  var fileInp = inp({type:"file",accept:".json",style:{display:"none"}});
-  fileInp.addEventListener("change", function(e) {
-    var file = e.target.files && e.target.files[0];
-    if (!file) return;
-    var reader = new FileReader();
-    reader.onload = function(ev) {
-      try {
-        var parsed = JSON.parse(ev.target.result);
-        if (!parsed.data || !parsed.data.projects) throw new Error("invalid");
-        persist(parsed.data);
-        if (parsed.settings) persistSett(Object.assign({}, DEF_SETT, parsed.settings));
-        set({importMsg:"ok"});
-      } catch(err) {
-        set({importMsg:"err"});
+const BADGE_CFG = {
+  idle:     ["statusIdle",     "rgba(238,238,245,0.38)", "rgba(238,238,245,0.05)"],
+  working:  ["statusWorking",  "#5ED5B7",                "rgba(94,213,183,0.1)"],
+  lunch:    ["statusLunch",    "#FFB547",                "rgba(255,181,71,0.1)"],
+  resumed:  ["statusResumed",  "#5ED5B7",                "rgba(94,213,183,0.1)"],
+  paused:   ["statusPaused",   "#FFB547",                "rgba(255,181,71,0.1)"],
+  complete: ["statusComplete", "#4DFF8A",                "rgba(77,255,138,0.1)"]
+};
+const Badge = ({ status, t }) => {
+  const cfg = BADGE_CFG[status] || ["", "rgba(238,238,245,0.38)", "transparent"];
+  return html`<span class="badge" style=${{ background: cfg[2], color: cfg[1] }}>${t[cfg[0]] || status}</span>`;
+};
+
+const Chip = ({ label, value, color = "#EEEEF5", bg = "rgba(255,255,255,0.05)" }) => {
+  if (!value) return null;
+  return html`
+    <div class="chip" style=${{ background: bg }}>
+      <div class="chip-l">${label}</div>
+      <div class="chip-v" style=${{ color }}>${value}</div>
+    </div>
+  `;
+};
+
+const Stepper = ({ value, onDec, onInc }) => html`
+  <div class="stepper">
+    <button class="stepper-btn" onClick=${onDec}>-</button>
+    <div class="stepper-val">${String(value)}</div>
+    <button class="stepper-btn" onClick=${onInc}>+</button>
+  </div>
+`;
+
+const Breakdown = ({ bk, t, settings }) => {
+  if (!bk) return null;
+  const rows = [
+    [t.normalHours,  fmtDur(bk.normal), "#5ED5B7",  false],
+    [t.overtime,     bk.extra > 0 ? fmtDur(bk.extra) : "--", "#FF5C3A", false],
+    [t.pausedTime,   bk.pausedMin > 0 ? "−" + fmtDur(bk.pausedMin) : "--", "#FFB547", false],
+    [t.noLunchBonus + " (+" + settings.lunchPenaltyH + "h)", bk.bonus > 0 ? "+" + fmtH(bk.bonus) : "--", "#A78BFF", false],
+    [t.net,          fmtDur(bk.total), "#EEEEF5", true]
+  ];
+  return html`
+    <div style=${{ background:"rgba(0,0,0,0.25)", borderRadius:"12px", border:"1px solid rgba(255,255,255,0.07)", overflow:"hidden", marginTop:"10px" }}>
+      <div style=${{ padding:"10px 14px 6px" }}><${Lbl}>${t.hoursBreakdown}<//></div>
+      <table><tbody>
+        ${rows.map((row, i) => html`
+          <tr key=${i}>
+            <td style=${{ color:"rgba(238,238,245,0.62)", fontWeight: row[3] ? "700" : "400" }}>${row[0]}</td>
+            <td style=${{ fontFamily:"'JetBrains Mono',monospace", fontWeight:"700", color: row[2], textAlign:"right", fontSize: row[3] ? "16px" : "14px" }}>${row[1]}</td>
+          </tr>
+        `)}
+      </tbody></table>
+    </div>
+  `;
+};
+
+const StorageErrorToast = ({ error, t, onDismiss }) => {
+  if (!error) return null;
+  const msg = error === "quota" ? t.storageErrQuota : t.storageErrSave;
+  return html`
+    <div style=${{
+      position:"fixed", left:"50%", bottom:"24px", transform:"translateX(-50%)",
+      background:"#FF4D4D", color:"#fff", padding:"10px 16px", borderRadius:"10px",
+      fontSize:"13px", fontWeight:"600", zIndex:"200", maxWidth:"calc(100% - 40px)",
+      boxShadow:"0 8px 24px rgba(0,0,0,0.4)", display:"flex", alignItems:"center", gap:"12px"
+    }}>
+      <span>${msg}</span>
+      <button style=${{ background:"transparent", border:"none", color:"#fff", fontSize:"18px", cursor:"pointer", padding:"0", lineHeight:"1" }} onClick=${onDismiss}>×</button>
+    </div>
+  `;
+};
+
+// ── Modals ────────────────────────────────────────────────────────────────────
+const ConfirmDeleteDialog = ({ t, onConfirm, onCancel }) => html`
+  <div class="overlay">
+    <div class="card popup">
+      <div class="fd" style=${{ fontSize:"18px", marginBottom:"8px" }}>${t.deleteProject}</div>
+      <div style=${{ color:"rgba(238,238,245,0.38)", fontSize:"14px", marginBottom:"20px" }}>${t.deleteWarning}</div>
+      <div class="flex-row">
+        <${Btn} kind="d" style=${{ flex:"1" }} onClick=${onConfirm}>${t.delete}<//>
+        <${Btn} kind="g" style=${{ flex:"1" }} onClick=${onCancel}>${t.cancel}<//>
+      </div>
+    </div>
+  </div>
+`;
+
+function RenameDialog({ initial, t, onSave, onCancel }) {
+  const [val, setVal] = useState(initial || "");
+  const inputRef = useRef(null);
+  useEffect(() => { inputRef.current?.focus(); inputRef.current?.select?.(); }, []);
+  const trySave = () => { if (val.trim()) onSave(val.trim()); };
+  return html`
+    <div class="overlay">
+      <div class="card popup">
+        <div class="fd" style=${{ fontSize:"18px", marginBottom:"14px" }}>${t.rename}</div>
+        <input ref=${inputRef} class="input-std" style=${{ marginBottom:"14px" }} value=${val}
+          onInput=${e => setVal(e.target.value)}
+          onKeyDown=${e => { if (e.key === "Enter") trySave(); if (e.key === "Escape") onCancel(); }}
+        />
+        <div class="flex-row">
+          <${Btn} kind="p" style=${{ flex:"1" }} onClick=${trySave}>${t.save}<//>
+          <${Btn} kind="g" style=${{ flex:"1" }} onClick=${onCancel}>${t.cancel}<//>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function CommentDialog({ initial, t, onSave, onCancel }) {
+  const [text, setText] = useState(initial || "");
+  const taRef = useRef(null);
+  useEffect(() => { taRef.current?.focus(); }, []);
+  return html`
+    <div class="overlay">
+      <div class="card popup">
+        <div class="fd" style=${{ fontSize:"18px", marginBottom:"14px" }}>${t.comment}</div>
+        <textarea ref=${taRef} placeholder=${t.addComment} value=${text}
+          onInput=${e => setText(e.target.value)}
+          onKeyDown=${e => { if (e.key === "Escape") onCancel(); }}
+          style=${{
+            width:"100%", background:"rgba(255,255,255,0.05)", border:"1px solid rgba(255,255,255,0.07)",
+            borderRadius:"10px", padding:"12px 14px", color:"#EEEEF5", fontSize:"15px",
+            fontFamily:"inherit", outline:"none", resize:"none", minHeight:"100px",
+            colorScheme:"dark", marginBottom:"14px", boxSizing:"border-box"
+          }}
+        ></textarea>
+        <div class="flex-row">
+          <${Btn} kind="g" style=${{ flex:"1" }} onClick=${onCancel}>${t.cancel}<//>
+          <${Btn} kind="p" style=${{ flex:"1" }} onClick=${() => onSave(text.trim() || null)}>${t.saveComment}<//>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function NewProjectForm({ t, onCreate, onCancel }) {
+  const [name, setName] = useState("");
+  const inputRef = useRef(null);
+  useEffect(() => { inputRef.current?.focus(); }, []);
+  const submit = () => { if (name.trim()) onCreate(name.trim()); };
+  return html`
+    <div class="card">
+      <div style=${{ marginBottom:"10px" }}><${Lbl}>${t.createProject}<//></div>
+      <input ref=${inputRef} class="input-std" placeholder=${t.projectName} value=${name}
+        style=${{ marginBottom:"12px" }}
+        onInput=${e => setName(e.target.value)}
+        onKeyDown=${e => { if (e.key === "Enter") submit(); if (e.key === "Escape") onCancel(); }}
+      />
+      <div class="flex-row">
+        <${Btn} kind="g" style=${{ flex:"1" }} onClick=${onCancel}>${t.cancel}<//>
+        <${Btn} kind="p" style=${{ flex:"1" }} onClick=${submit}>${t.create}<//>
+      </div>
+    </div>
+  `;
+}
+
+// ── Comment button (inline, shared between today + report) ────────────────────
+const CommentBtn = ({ day, onOpen }) => {
+  const hasComment = !!(day && day.comment && day.comment.trim());
+  return html`
+    <button
+      onClick=${e => { e.stopPropagation(); onOpen(); }}
+      style=${{
+        background: hasComment ? "rgba(167,139,255,0.15)" : "rgba(255,255,255,0.05)",
+        border: "1px solid " + (hasComment ? "rgba(167,139,255,0.35)" : "rgba(255,255,255,0.07)"),
+        borderRadius:"8px", color: hasComment ? "#A78BFF" : "rgba(238,238,245,0.38)",
+        fontSize:"13px", cursor:"pointer", padding:"4px 10px", lineHeight:"1.4",
+        display:"flex", alignItems:"center", gap:"4px"
+      }}
+    >
+      💬${hasComment && html`<span style=${{ width:"6px", height:"6px", borderRadius:"50%", background:"#A78BFF", display:"inline-block" }}/>`}
+    </button>
+  `;
+};
+
+// ── Projects view ─────────────────────────────────────────────────────────────
+function ProjectsView({ S, set, persist, t }) {
+  const handleCreate = name => {
+    persist(Object.assign({}, S.data, {
+      projects: S.data.projects.concat([{ id: uid(), name, days: [], createdAt: todayStr() }])
+    }));
+    set({ showNewProj: false });
+  };
+  const handleConfirmDelete = id => {
+    persist(Object.assign({}, S.data, { projects: S.data.projects.filter(p => p.id !== id) }));
+    set({
+      confirmDelete: null,
+      activeProjId: S.activeProjId === id ? null : S.activeProjId,
+      view: S.activeProjId === id ? "projects" : S.view
+    });
+  };
+
+  return html`
+    <div class="app">
+      ${S.confirmDelete && html`
+        <${ConfirmDeleteDialog} t=${t}
+          onConfirm=${() => handleConfirmDelete(S.confirmDelete)}
+          onCancel=${() => set({ confirmDelete: null })}/>
+      `}
+
+      <div class="hdr" style=${{ flexDirection:"column", alignItems:"flex-start", paddingBottom:"16px" }}>
+        <div style=${{ display:"flex", justifyContent:"space-between", alignItems:"flex-end", width:"100%" }}>
+          <h1 class="fd" style=${{ fontSize:"34px", margin:"0", letterSpacing:"-0.5px" }}>${t.projects}</h1>
+          <${Btn} kind="g" style=${{ padding:"11px 15px", fontSize:"18px" }} onClick=${() => set({ view: "settings" })}>⚙<//>
+        </div>
+      </div>
+
+      <div class="sec">
+        ${S.data.projects.length === 0 && !S.showNewProj && html`
+          <div style=${{ textAlign:"center", padding:"48px 0 32px", color:"rgba(238,238,245,0.38)" }}>
+            <div style=${{ fontSize:"44px", marginBottom:"12px" }}>⏱</div>
+            <div style=${{ fontSize:"16px", fontWeight:"600", color:"rgba(238,238,245,0.62)", marginBottom:"6px" }}>${t.noProjects}</div>
+            <div>${t.noProjectsHint}</div>
+          </div>
+        `}
+
+        ${[...S.data.projects].reverse().map(p => html`
+          <${ProjectCard} key=${p.id} p=${p} settings=${S.settings} t=${t}
+            onOpen=${() => set({ activeProjId: p.id, view: "project" })}
+            onDelete=${() => set({ confirmDelete: p.id })}
+          />
+        `)}
+
+        ${S.showNewProj ? html`
+          <${NewProjectForm} t=${t}
+            onCreate=${handleCreate}
+            onCancel=${() => set({ showNewProj: false })}/>
+        ` : html`
+          <${Btn} kind="p" style=${{ width:"100%", fontSize:"15px" }} onClick=${() => set({ showNewProj: true })}>${t.newProject}<//>
+        `}
+      </div>
+    </div>
+  `;
+}
+
+function ProjectCard({ p, settings, t, onOpen, onDelete }) {
+  const tDay = p.days.find(d => d.date === todayStr());
+  const tSt = getDayStatus(tDay);
+  const isTracking = tSt !== "idle" && tSt !== "complete";
+  const tBK = calcBreakdown(tDay, settings);
+  const totalMin = p.days.filter(d => d.workStart).reduce((acc, d) => {
+    const b = calcBreakdown(d, settings); return acc + (b ? b.total : 0);
+  }, 0);
+
+  return html`
+    <div class=${"card" + (isTracking ? " card-on" : "")} style=${{ cursor:"pointer" }} onClick=${onOpen}>
+      <div style=${{ display:"flex", justifyContent:"space-between", alignItems:"flex-start" }}>
+        <div style=${{ flex:"1" }}>
+          <div style=${{ display:"flex", alignItems:"center", gap:"8px", marginBottom:"10px" }}>
+            <div style=${{ fontSize:"16px", fontWeight:"700" }}>${p.name}</div>
+            ${(isTracking || tSt === "complete") && html`<${Badge} status=${tSt} t=${t}/>`}
+          </div>
+          <div style=${{ display:"flex", gap:"20px" }}>
+            <div>
+              <div style=${{ marginBottom:"3px" }}><${Lbl}>${t.days}<//></div>
+              <div class="mono" style=${{ fontSize:"20px" }}>${p.days.filter(d => d.workStart).length}</div>
+            </div>
+            <div>
+              <div style=${{ marginBottom:"3px" }}><${Lbl}>${t.total}<//></div>
+              <div class="mono" style=${{ fontSize:"20px", color: totalMin > 0 ? "#5ED5B7" : "rgba(238,238,245,0.38)" }}>${fmtDur(totalMin)}</div>
+            </div>
+            ${isTracking && tBK && html`
+              <div>
+                <div style=${{ marginBottom:"3px" }}><${Lbl}>${t.today}<//></div>
+                <div class="mono" style=${{ fontSize:"20px", color:"#5ED5B7" }}>${fmtDur(tBK.net)}</div>
+              </div>
+            `}
+          </div>
+        </div>
+        <button
+          style=${{ background:"transparent", border:"none", color:"rgba(238,238,245,0.38)", fontSize:"20px", cursor:"pointer", padding:"0 0 0 8px" }}
+          onClick=${e => { e.stopPropagation(); onDelete(); }}
+        >×</button>
+      </div>
+    </div>
+  `;
+}
+
+// ── Project view ──────────────────────────────────────────────────────────────
+function ProjectView({ S, set, persist, t }) {
+  const proj = S.data.projects.find(p => p.id === S.activeProjId);
+  if (!proj) return html`<${ProjectsView} S=${S} set=${set} persist=${persist} t=${t}/>`;
+
+  const today = todayStr();
+  const todayDay = proj.days.find(d => d.date === today) || null;
+  const todaySt = getDayStatus(todayDay);
+  const todayBK = calcBreakdown(todayDay, S.settings);
+  const past = proj.days.filter(d => d.date !== today).sort((a, b) => b.date.localeCompare(a.date));
+  const totalMin = proj.days.reduce((acc, d) => {
+    const b = calcBreakdown(d, S.settings); return acc + (b ? b.total : 0);
+  }, 0);
+  const locale = getLocale(S.settings.lang);
+
+  const upsertDay = day => {
+    persist(Object.assign({}, S.data, {
+      projects: S.data.projects.map(p => {
+        if (p.id !== proj.id) return p;
+        const exists = p.days.some(d => d.id === day.id);
+        return Object.assign({}, p, {
+          days: exists ? p.days.map(d => d.id === day.id ? day : d) : p.days.concat([day])
+        });
+      })
+    }));
+  };
+
+  const tapAction = action => {
+    const time = nowTime();
+    const base = todayDay || { id: uid(), date: today, workStart: null, lunchStart: null, lunchEnd: null, workEnd: null, pauses: [] };
+    const day = Object.assign({}, base, { pauses: (base.pauses || []).slice() });
+
+    if (action === "pause") {
+      day.pauses.push({ start: time, end: null });
+    } else if (action === "resumePause") {
+      const last = day.pauses[day.pauses.length - 1];
+      if (last && !last.end) {
+        day.pauses[day.pauses.length - 1] = Object.assign({}, last, { end: time });
       }
-      setTimeout(function() { set({importMsg:null}); }, 3000);
+    } else {
+      if (action === "end") {
+        const lastP = day.pauses[day.pauses.length - 1];
+        if (lastP && lastP.start && !lastP.end) {
+          day.pauses[day.pauses.length - 1] = Object.assign({}, lastP, { end: time });
+        }
+      }
+      const upd = { start:{workStart:time}, lunch:{lunchStart:time}, resume:{lunchEnd:time}, end:{workEnd:time} }[action] || {};
+      Object.assign(day, upd);
+    }
+    upsertDay(day);
+  };
+
+  const handleRenameSave = newName => {
+    persist(Object.assign({}, S.data, {
+      projects: S.data.projects.map(p => p.id === proj.id ? Object.assign({}, p, { name: newName }) : p)
+    }));
+    set({ renameProj: null });
+  };
+
+  const handleCommentSave = newText => {
+    const cd = S.commentDay;
+    persist(Object.assign({}, S.data, {
+      projects: S.data.projects.map(p => {
+        if (p.id !== cd.projId) return p;
+        return Object.assign({}, p, {
+          days: p.days.map(d => d.id === cd.dayId ? Object.assign({}, d, { comment: newText }) : d)
+        });
+      })
+    }));
+    set({ commentDay: null });
+  };
+
+  return html`
+    <div class="app">
+      ${S.renameProj !== null && html`
+        <${RenameDialog} initial=${S.renameProj} t=${t}
+          onSave=${handleRenameSave}
+          onCancel=${() => set({ renameProj: null })}/>
+      `}
+      ${S.commentDay && html`
+        <${CommentDialog} initial=${S.commentDay.text} t=${t}
+          onSave=${handleCommentSave}
+          onCancel=${() => set({ commentDay: null })}/>
+      `}
+
+      <div class="hdr">
+        <${Btn} kind="g" onClick=${() => set({ view: "projects" })}>${t.backProjects}<//>
+        <div class="flex-row">
+          <${Btn} kind="g" onClick=${() => set({ view: "settings" })}>⚙<//>
+          <${Btn} kind="g" style=${{ color:"#FF5C3A", borderColor:"rgba(255,92,58,0.2)" }} onClick=${() => set({ view: "report" })}>${t.report}<//>
+        </div>
+      </div>
+
+      <div style=${{ padding:"0 20px 16px" }}>
+        <div style=${{ display:"flex", alignItems:"center", gap:"10px", marginBottom:"4px" }}>
+          <h2 class="fd" style=${{ fontSize:"26px", margin:"0" }}>${proj.name}</h2>
+          <button
+            style=${{ background:"rgba(255,255,255,0.07)", border:"1px solid rgba(255,255,255,0.07)", borderRadius:"8px", color:"rgba(238,238,245,0.62)", fontSize:"13px", cursor:"pointer", padding:"4px 9px", lineHeight:"1" }}
+            onClick=${() => set({ renameProj: proj.name })}
+          >✎</button>
+        </div>
+        <${Lbl}>${proj.days.length + " " + t.days + " · " + fmtDur(totalMin) + " " + t.total.toLowerCase()}<//>
+      </div>
+
+      <div class="sec">
+        <div style=${{ marginBottom:"10px" }}>
+          <${Lbl}>${t.today + " · " + new Date().toLocaleDateString(locale, { day:"numeric", month:"long" })}<//>
+        </div>
+
+        <div class=${"card" + (todaySt !== "idle" ? " card-on" : "")}>
+          <div style=${{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:"14px" }}>
+            <div class="mono" style=${{ fontSize:"40px", letterSpacing:"-1px", lineHeight:"1" }}>${S.clock}</div>
+            <div style=${{ display:"flex", alignItems:"center", gap:"8px" }}>
+              <${Badge} status=${todaySt} t=${t}/>
+              ${todaySt !== "idle" && html`
+                <button
+                  style=${{ background:"rgba(255,255,255,0.07)", border:"1px solid rgba(255,255,255,0.07)", borderRadius:"8px", color:"rgba(238,238,245,0.62)", fontSize:"15px", cursor:"pointer", padding:"4px 9px", lineHeight:"1" }}
+                  onClick=${() => {
+                    const base = todayDay || { id: uid(), date: today, workStart: null, lunchStart: null, lunchEnd: null, workEnd: null };
+                    set({ editDay: Object.assign({}, base, { _pid: proj.id, _isNew: !todayDay }) });
+                  }}
+                >${t.edit}</button>
+              `}
+            </div>
+          </div>
+
+          ${todayDay && html`
+            <div style=${{ display:"flex", gap:"6px", flexWrap:"wrap", marginBottom:"12px" }}>
+              <${Chip} label=${t.rptEntry} value=${todayDay.workStart}/>
+              ${todayDay.lunchStart && html`<${Chip} label=${t.rptLunch} value=${todayDay.lunchStart + "–" + (todayDay.lunchEnd || "?")} color="#FFB547" bg="rgba(255,181,71,0.1)"/>`}
+              ${todayDay.workEnd && html`<${Chip} label=${t.rptExit} value=${todayDay.workEnd} color="#5ED5B7" bg="rgba(94,213,183,0.1)"/>`}
+            </div>
+          `}
+
+          ${S.settings.lunchPenaltyH > 0 && todayDay && html`
+            <div
+              style=${{ display:"flex", alignItems:"center", gap:"10px", marginBottom:"14px", cursor:"pointer", userSelect:"none" }}
+              onClick=${() => upsertDay(Object.assign({}, todayDay, { applyLunchPenalty: todayDay.applyLunchPenalty !== true }))}
+            >
+              <div class="cb-box" style=${{
+                border: "2px solid " + (todayDay.applyLunchPenalty === true ? "#5ED5B7" : "rgba(255,255,255,0.07)"),
+                background: todayDay.applyLunchPenalty === true ? "rgba(94,213,183,0.1)" : "transparent"
+              }}>
+                ${todayDay.applyLunchPenalty === true && html`<span style=${{ fontSize:"12px", color:"#5ED5B7" }}>✓</span>`}
+              </div>
+              <span style=${{ fontSize:"13px", color: todayDay.applyLunchPenalty === true ? "#5ED5B7" : "rgba(238,238,245,0.62)" }}>
+                ${t.applyPenalty + " (+" + S.settings.lunchPenaltyH + "h)"}
+              </span>
+            </div>
+          `}
+
+          ${todayBK ? html`
+            <div style=${{ marginBottom:"12px", display:"flex", alignItems:"center", justifyContent:"space-between" }}>
+              <div>
+                <${Lbl}>${t.workedToday + " · "}<//>
+                <span class="mono" style=${{ fontSize:"15px", color:"#5ED5B7" }}>${fmtDur(todayBK.normal)}</span>
+                ${todayBK.extra > 0 && html`<span class="mono" style=${{ fontSize:"13px", color:"#FF5C3A", marginLeft:"8px" }}>+${fmtDur(todayBK.extra)} extra</span>`}
+                ${todayBK.pausedMin > 0 && html`<span class="mono" style=${{ fontSize:"13px", color:"#FFB547", marginLeft:"8px" }}>−${fmtDur(todayBK.pausedMin)} pausa</span>`}
+                ${todayBK.bonus > 0 && html`<span class="mono" style=${{ fontSize:"13px", color:"#A78BFF", marginLeft:"8px" }}>+${fmtH(todayBK.bonus)} Penalty Lunch</span>`}
+              </div>
+              ${todayDay && html`<${CommentBtn} day=${todayDay} onOpen=${() => set({ commentDay: { projId: proj.id, dayId: todayDay.id, text: todayDay.comment || "" } })}/>`}
+            </div>
+          ` : (todayDay && todaySt !== "idle") && html`
+            <div style=${{ marginBottom:"12px", display:"flex", justifyContent:"flex-end" }}>
+              <${CommentBtn} day=${todayDay} onOpen=${() => set({ commentDay: { projId: proj.id, dayId: todayDay.id, text: todayDay.comment || "" } })}/>
+            </div>
+          `}
+
+          <div class="flex-row" style=${{ flexWrap:"wrap" }}>
+            ${todaySt === "idle"     && html`<${Btn} kind="p" style=${{ flex:"1" }} onClick=${() => tapAction("start")}>${t.start}<//>`}
+            ${todaySt === "working"  && html`
+              <${Btn} kind="w" style=${{ flex:"1" }} onClick=${() => tapAction("lunch")}>${t.lunch}<//>
+              <${Btn} kind="w" style=${{ flex:"1" }} onClick=${() => tapAction("pause")}>${t.pause}<//>
+              <${Btn} kind="s" style=${{ flex:"1" }} onClick=${() => tapAction("end")}>${t.end}<//>
+            `}
+            ${todaySt === "lunch"    && html`<${Btn} kind="t" style=${{ flex:"1" }} onClick=${() => tapAction("resume")}>${t.resume}<//>`}
+            ${todaySt === "paused"   && html`<${Btn} kind="t" style=${{ flex:"1" }} onClick=${() => tapAction("resumePause")}>${t.resumeWork}<//>`}
+            ${todaySt === "resumed"  && html`<${Btn} kind="s" style=${{ flex:"1" }} onClick=${() => tapAction("end")}>${t.end}<//>`}
+            ${todaySt === "complete" && html`<div style=${{ width:"100%", textAlign:"center", color:"rgba(238,238,245,0.38)", fontSize:"13px", marginTop:"4px" }}>${t.complete}</div>`}
+          </div>
+        </div>
+
+        <${Btn} kind="g" style=${{ width:"100%", fontSize:"13px" }}
+          onClick=${() => set({ editDay: { id: uid(), date:"", workStart:null, lunchStart:null, lunchEnd:null, workEnd:null, _pid: proj.id, _isNew: true } })}
+        >${t.addManual}<//>
+      </div>
+
+      ${past.length > 0 && html`
+        <div style=${{ padding:"24px 20px 0" }}>
+          <div style=${{ marginBottom:"12px" }}><${Lbl}>${t.pastDays}<//></div>
+          ${past.map(day => {
+            const bk = calcBreakdown(day, S.settings);
+            return html`
+              <div key=${day.id} class="card" style=${{ cursor:"pointer", display:"flex", justifyContent:"space-between", alignItems:"center" }}
+                onClick=${() => set({ editDay: Object.assign({}, day, { _pid: proj.id, _isNew: false }) })}
+              >
+                <div>
+                  <div style=${{ fontSize:"14px", fontWeight:"600", textTransform:"capitalize", marginBottom:"5px" }}>${fmtDateShort(day.date, S.settings.lang)}</div>
+                  <${Badge} status=${getDayStatus(day)} t=${t}/>
+                </div>
+                <div style=${{ textAlign:"right" }}>
+                  <div class="mono" style=${{ fontSize:"20px", color: bk ? "#5ED5B7" : "rgba(238,238,245,0.38)" }}>${bk ? fmtDur(bk.total) : "--"}</div>
+                  ${bk && bk.extra > 0 && html`<div class="mono" style=${{ fontSize:"11px", color:"#FF5C3A" }}>+${fmtDur(bk.extra)}</div>`}
+                  <div style=${{ fontSize:"10px", color:"rgba(238,238,245,0.38)", marginTop:"2px" }}>editar →</div>
+                  ${day.comment && html`<span style=${{ fontSize:"13px", color:"#A78BFF", display:"block", marginTop:"4px" }}>💬</span>`}
+                </div>
+              </div>
+            `;
+          })}
+        </div>
+      `}
+    </div>
+  `;
+}
+
+// ── Report view ───────────────────────────────────────────────────────────────
+function ReportView({ S, set, t }) {
+  const proj = S.data.projects.find(p => p.id === S.activeProjId);
+  if (!proj) return html`<${ProjectsView} S=${S} set=${set} persist=${() => {}} t=${t}/>`;
+
+  const days = proj.days.filter(d => d.workStart).sort((a, b) => a.date.localeCompare(b.date));
+  const bks = days.map(d => calcBreakdown(d, S.settings)).filter(Boolean);
+  const tot = { total:0, normal:0, extra:0, bonus:0 };
+  bks.forEach(b => { tot.total += b.total; tot.normal += b.normal; tot.extra += b.extra; tot.bonus += b.bonus; });
+
+  const onExport = () => {
+    const text = generateReportText(proj, S.settings);
+    const blob = new Blob([text], { type:"text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    const suffix = S.settings.lang === "en" ? "_report" : S.settings.lang === "de" ? "_bericht" : "_informe";
+    a.download = proj.name.replace(/\s+/g, "_") + suffix + ".txt";
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  return html`
+    <div class="app">
+      <div class="hdr">
+        <${Btn} kind="g" onClick=${() => set({ view: "project" })}>${t.backProj}<//>
+        <${Btn} kind="g" onClick=${() => set({ view: "settings" })}>⚙<//>
+      </div>
+
+      <div class="sec">
+        <h2 class="fd" style=${{ fontSize:"24px", margin:"0 0 2px" }}>${proj.name}</h2>
+        <${Lbl}>${days.length + " " + t.days}<//>
+
+        <div class="grid2" style=${{ margin:"16px 0 12px" }}>
+          ${[
+            [t.normalHours,  fmtDur(tot.normal),                      "#5ED5B7"],
+            [t.overtime,     tot.extra > 0 ? fmtDur(tot.extra) : "--", "#FF5C3A"],
+            [t.noLunchBonus, tot.bonus > 0 ? "+" + fmtH(tot.bonus) : "--", "#A78BFF"],
+            [t.totalHours,   fmtDur(tot.total),                       "#EEEEF5"]
+          ].map((item, i) => html`
+            <div key=${i} class="card" style=${{ textAlign:"center", marginBottom:"0" }}>
+              <div style=${{ marginBottom:"5px" }}><${Lbl}>${item[0]}<//></div>
+              <div class="mono" style=${{ fontSize:"20px", color: item[2] }}>${item[1]}</div>
+            </div>
+          `)}
+        </div>
+
+        <${Btn} kind="g" style=${{ width:"100%", fontSize:"14px", marginBottom:"12px" }} onClick=${onExport}>${t.exportReport}<//>
+
+        ${days.length === 0 ? html`
+          <div style=${{ textAlign:"center", padding:"40px 0", color:"rgba(238,238,245,0.38)" }}>
+            <div style=${{ fontSize:"36px", marginBottom:"10px" }}>📊</div>
+            <div>${t.noCompletedDays}</div>
+          </div>
+        ` : days.map((day, i) => {
+          const bk = bks[i];
+          return html`
+            <div key=${day.id} class="card" style=${{ cursor:"pointer" }}
+              onClick=${() => set({ editDay: Object.assign({}, day, { _pid: proj.id, _isNew: false }) })}
+            >
+              <div style=${{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:"10px" }}>
+                <div>
+                  <div style=${{ fontSize:"14px", fontWeight:"600", textTransform:"capitalize", marginBottom:"5px" }}>${fmtDate(day.date, S.settings.lang)}</div>
+                  <${Badge} status=${getDayStatus(day)} t=${t}/>
+                </div>
+                <div style=${{ textAlign:"right" }}>
+                  <div class="mono" style=${{ fontSize:"22px", color: bk ? "#5ED5B7" : "rgba(238,238,245,0.38)" }}>${bk ? fmtDur(bk.total) : "--"}</div>
+                  ${bk && bk.extra > 0 && html`<div class="mono" style=${{ fontSize:"12px", color:"#FF5C3A" }}>+${fmtDur(bk.extra)} extra</div>`}
+                </div>
+              </div>
+              <div style=${{ display:"flex", gap:"6px", flexWrap:"wrap", marginBottom:"6px" }}>
+                <${Chip} label=${t.rptEntry} value=${day.workStart}/>
+                ${day.lunchStart && html`<${Chip} label=${t.rptLunch} value=${day.lunchStart + "–" + (day.lunchEnd || "?")} color="#FFB547" bg="rgba(255,181,71,0.1)"/>`}
+                <${Chip} label=${t.rptExit} value=${day.workEnd} color="#5ED5B7" bg="rgba(94,213,183,0.1)"/>
+              </div>
+              ${bk && html`<${Breakdown} bk=${bk} t=${t} settings=${S.settings}/>`}
+              <div style=${{ fontSize:"11px", color:"rgba(238,238,245,0.38)", marginTop:"8px", textAlign:"right" }}>${t.editTap} →</div>
+            </div>
+          `;
+        })}
+      </div>
+    </div>
+  `;
+}
+
+// ── Settings view ─────────────────────────────────────────────────────────────
+function SettingsView({ S, set, persistSett, t }) {
+  const [draft, setDraft] = useState(S.settings);
+  const [importMsg, setImportMsg] = useState(null);
+  const fileRef = useRef(null);
+
+  const upd = patch => setDraft(d => Object.assign({}, d, patch));
+
+  const onExport = () => {
+    const payload = { version: 1, exportedAt: new Date().toISOString(), data: S.data, settings: S.settings };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type:"application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = "worktracker-backup-" + todayStr() + ".json"; a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const onImportFile = e => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = ev => {
+      try {
+        const parsed = JSON.parse(ev.target.result);
+        if (!isValidImport(parsed)) throw new Error("invalid");
+        set({ _importData: parsed });  // bubble up
+        setImportMsg("ok");
+      } catch (err) {
+        setImportMsg("err");
+      }
+      setTimeout(() => setImportMsg(null), 3000);
       e.target.value = "";
     };
     reader.readAsText(file);
-  });
-  var impBtn = div({
-    "class":"btn btn-g",
-    style:{width:"100%",textAlign:"center",cursor:"pointer"},
-    "onClick":function() { fileInp.click(); }
-  }, ["⬆ "+t.importData]);
-  bkCard.appendChild(fileInp);
-  bkCard.appendChild(impBtn);
-  if (S.importMsg) {
-    var ok = S.importMsg === "ok";
-    bkCard.appendChild(div({style:{marginTop:"10px",padding:"9px 13px",borderRadius:"10px",fontSize:"13px",fontWeight:"600",background:ok?"rgba(94,213,183,0.1)":"rgba(255,77,77,0.1)",color:ok?"#5ED5B7":"#FF4D4D"}}, [ok?t.importSuccess:t.importError]));
-  }
-  sec.appendChild(bkCard);
+  };
 
-  var saveBtn = Btn("p", t.saveSettings, function() {
-    persistSett(ds);
-    S.draftSett = null;
-    set({view: S.activeProjId?"project":"projects"});
-  }, {width:"100%",fontSize:"15px"});
-  sec.appendChild(saveBtn);
-  root.appendChild(sec);
-  return root;
+  return html`
+    <div class="app">
+      <div class="hdr">
+        <${Btn} kind="g" onClick=${() => set({ view: S.activeProjId ? "project" : "projects" })}>${t.back}<//>
+        <span class="fd" style=${{ fontSize:"17px" }}>${t.settingsTitle}</span>
+        <div style=${{ width:"80px" }}/>
+      </div>
+
+      <div class="sec">
+        <div class="card">
+          <div style=${{ marginBottom:"12px" }}><${Lbl}>${t.language}<//></div>
+          <div class="flex-row">
+            ${[["es","🇪🇸 Español"],["en","🇬🇧 English"],["de","🇩🇪 Deutsch"]].map(([l, label]) => html`
+              <button key=${l} class="btn"
+                style=${{
+                  flex:"1",
+                  background: draft.lang === l ? "#FF5C3A" : "rgba(255,255,255,0.05)",
+                  color: draft.lang === l ? "#fff" : "rgba(238,238,245,0.62)",
+                  border: draft.lang === l ? "none" : "1px solid rgba(255,255,255,0.07)"
+                }}
+                onClick=${() => upd({ lang: l })}
+              >${label}</button>
+            `)}
+          </div>
+        </div>
+
+        <div class="card">
+          <div style=${{ marginBottom:"4px" }}><${Lbl}>${t.identity}<//></div>
+          <div style=${{ fontSize:"12px", color:"rgba(238,238,245,0.38)", marginBottom:"12px" }}>${t.fullNameHint}</div>
+          <input class="input-std" placeholder=${t.fullName} value=${draft.fullName || ""}
+            onInput=${e => upd({ fullName: e.target.value })}
+          />
+        </div>
+
+        <div class="card">
+          <div style=${{ marginBottom:"4px" }}><${Lbl}>${t.workdayHours}<//></div>
+          <div style=${{ fontSize:"12px", color:"rgba(238,238,245,0.38)", marginBottom:"14px" }}>${t.overtimeHint}</div>
+          <div style=${{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+            <span style=${{ fontSize:"15px", color:"rgba(238,238,245,0.62)" }}>${"(" + (draft.workdayHours - 1) + "h + 1h)"}</span>
+            <${Stepper} value=${draft.workdayHours}
+              onDec=${() => upd({ workdayHours: Math.max(1, parseFloat((draft.workdayHours - 0.5).toFixed(1))) })}
+              onInc=${() => upd({ workdayHours: Math.min(24, parseFloat((draft.workdayHours + 0.5).toFixed(1))) })}
+            />
+          </div>
+        </div>
+
+        <div class="card">
+          <div style=${{ marginBottom:"4px" }}><${Lbl}>${t.lunchPenaltyMin}<//></div>
+          <div style=${{ fontSize:"12px", color:"rgba(238,238,245,0.38)", marginBottom:"14px" }}>${t.lunchPenaltyHint}</div>
+          <div style=${{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:"14px" }}>
+            <span style=${{ fontSize:"15px", color:"rgba(238,238,245,0.62)" }}>${draft.lunchPenaltyH + "h"}</span>
+            <${Stepper} value=${draft.lunchPenaltyH}
+              onDec=${() => upd({ lunchPenaltyH: Math.max(0, parseFloat((draft.lunchPenaltyH - 0.5).toFixed(1))) })}
+              onInc=${() => upd({ lunchPenaltyH: Math.min(4, parseFloat((draft.lunchPenaltyH + 0.5).toFixed(1))) })}
+            />
+          </div>
+          <div style=${{ background:"rgba(94,213,183,0.1)", borderRadius:"10px", padding:"10px 13px" }}>
+            <div style=${{ fontSize:"12px", color:"#5ED5B7" }}>
+              ${draft.lunchPenaltyH === 0 ? "Sin Penalty Lunch configurado." : "Se aplicará Penalty Lunch de " + draft.lunchPenaltyH + "h si no se para a comer."}
+            </div>
+            ${draft.lunchPenaltyH > 0 && html`
+              <div style=${{ fontSize:"13px", fontFamily:"'JetBrains Mono',monospace", fontWeight:"700", color:"#5ED5B7", marginTop:"4px" }}>${"= +" + draft.lunchPenaltyH + "h"}</div>
+            `}
+          </div>
+        </div>
+
+        <div class="card">
+          <div style=${{ marginBottom:"14px" }}><${Lbl}>${t.dataBackup}<//></div>
+          <div style=${{ fontSize:"12px", color:"rgba(238,238,245,0.38)", marginBottom:"10px" }}>${t.exportHint}</div>
+          <${Btn} kind="g" style=${{ width:"100%", fontSize:"14px" }} onClick=${onExport}>${"⬇ " + t.exportData}<//>
+          <div class="div-line" style=${{ margin:"14px 0" }}/>
+          <div style=${{ fontSize:"12px", color:"rgba(238,238,245,0.38)", marginBottom:"10px" }}>${t.importHint}</div>
+          <input ref=${fileRef} type="file" accept=".json" style=${{ display:"none" }} onChange=${onImportFile}/>
+          <div class="btn btn-g" style=${{ width:"100%", textAlign:"center", cursor:"pointer" }}
+            onClick=${() => fileRef.current?.click()}
+          >${"⬆ " + t.importData}</div>
+          ${importMsg && html`
+            <div style=${{
+              marginTop:"10px", padding:"9px 13px", borderRadius:"10px", fontSize:"13px", fontWeight:"600",
+              background: importMsg === "ok" ? "rgba(94,213,183,0.1)" : "rgba(255,77,77,0.1)",
+              color: importMsg === "ok" ? "#5ED5B7" : "#FF4D4D"
+            }}>
+              ${importMsg === "ok" ? t.importSuccess : t.importError}
+            </div>
+          `}
+        </div>
+
+        <${Btn} kind="p" style=${{ width:"100%", fontSize:"15px" }}
+          onClick=${() => { persistSett(draft); set({ view: S.activeProjId ? "project" : "projects" }); }}
+        >${t.saveSettings}<//>
+      </div>
+    </div>
+  `;
 }
 
-function renderEditDay() {
-  var ed = S.editDay;
-  var t = LANGS[S.settings.lang] || LANGS.es;
-  var bk = calcBreakdown(ed, S.settings);
+// ── Edit-day view ─────────────────────────────────────────────────────────────
+function EditDayView({ S, set, persist, t }) {
+  const [day, setDay] = useState(S.editDay);
+  const settings = S.settings;
+  const bk = calcBreakdown(day, settings);
 
-  var root = div({"class":"app"});
-  var hdr = div({"class":"hdr", style:{gap:"8px"}});
-  hdr.appendChild(Btn("g", t.back, function() { set({editDay:null}); }));
-  hdr.appendChild(span({"class":"fd", style:{fontSize:"15px",color:"rgba(238,238,245,0.62)",textAlign:"center",flex:"1"}}, [ed._isNew?t.newDay:t.editDay]));
-  hdr.appendChild(div({style:{width:"73px",flexShrink:"0"}}));
-  root.appendChild(hdr);
+  const upd = patch => setDay(d => Object.assign({}, d, patch));
 
-  var sec = div({"class":"sec"});
-  var card = div({"class":"card"});
+  const upsertDay = () => {
+    if (!day.date) return;
+    persist(Object.assign({}, S.data, {
+      projects: S.data.projects.map(p => {
+        if (p.id !== day._pid) return p;
+        const finalDay = {
+          id: day.id, date: day.date,
+          workStart: day.workStart, lunchStart: day.lunchStart,
+          lunchEnd: day.lunchEnd, workEnd: day.workEnd,
+          comment: day.comment || null,
+          applyLunchPenalty: day.applyLunchPenalty,
+          pauses: day.pauses || []
+        };
+        const exists = p.days.some(d => d.id === finalDay.id);
+        return Object.assign({}, p, {
+          days: exists ? p.days.map(d => d.id === finalDay.id ? finalDay : d) : p.days.concat([finalDay])
+        });
+      })
+    }));
+    set({ editDay: null });
+  };
 
-  var bkContainer = div({id:"bk-container"});
-  if (bk) { var bkEl = BreakdownEl(bk, t, S.settings); if (bkEl) bkContainer.appendChild(bkEl); }
+  const addPause = () => upd({ pauses: (day.pauses || []).concat([{ start:"", end:"" }]) });
+  const removePause = idx => upd({ pauses: (day.pauses || []).filter((_, i) => i !== idx) });
+  const updatePauseField = (idx, field, value) => {
+    const pauses = (day.pauses || []).slice();
+    pauses[idx] = Object.assign({}, pauses[idx], { [field]: value });
+    upd({ pauses });
+  };
 
-  function makeRow(labelText, type, value, onChange) {
-    var row = div({"class":"row", style:{cursor:"pointer"}});
-    row.appendChild(lbl(labelText));
-    var i = inp({type:type, "class":type==="time"?"time-inp":"date-inp", value:value||""});
-    i.addEventListener("change", function(e) {
-      onChange(e.target.value||null);
-      var newBk = calcBreakdown(S.editDay, S.settings);
-      bkContainer.innerHTML = "";
-      if (newBk) { var newEl = BreakdownEl(newBk, t, S.settings); if (newEl) bkContainer.appendChild(newEl); }
-    });
-    row.addEventListener("click", function() { i.focus(); i.click(); });
-    row.appendChild(i);
-    return row;
-  }
-
-  var fields = [
-    {label:t.date,      type:"date", val:ed.date,       key:"date"},
-    {label:t.workStart, type:"time", val:ed.workStart,  key:"workStart"},
-    {label:t.lunchStart,type:"time", val:ed.lunchStart, key:"lunchStart"},
-    {label:t.lunchEnd,  type:"time", val:ed.lunchEnd,   key:"lunchEnd"},
-    {label:t.workEnd,   type:"time", val:ed.workEnd,    key:"workEnd"}
+  const fields = [
+    { label: t.date,       type: "date", key: "date"       },
+    { label: t.workStart,  type: "time", key: "workStart"  },
+    { label: t.lunchStart, type: "time", key: "lunchStart" },
+    { label: t.lunchEnd,   type: "time", key: "lunchEnd"   },
+    { label: t.workEnd,    type: "time", key: "workEnd"    }
   ];
 
-  fields.forEach(function(f, i) {
-    if (i > 0) card.appendChild(div({"class":"div-line"}));
-    var key = f.key;
-    card.appendChild(makeRow(f.label, f.type, f.val, function(v) {
-      S.editDay = Object.assign({}, S.editDay, {[key]: v});
-    }));
-  });
-  sec.appendChild(card);
+  return html`
+    <div class="app">
+      <div class="hdr" style=${{ gap:"8px" }}>
+        <${Btn} kind="g" onClick=${() => set({ editDay: null })}>${t.back}<//>
+        <span class="fd" style=${{ fontSize:"15px", color:"rgba(238,238,245,0.62)", textAlign:"center", flex:"1" }}>${day._isNew ? t.newDay : t.editDay}</span>
+        <div style=${{ width:"73px", flexShrink:"0" }}/>
+      </div>
 
-  // Pauses section
-  var pausesCard = div({"class":"card"});
+      <div class="sec">
+        <div class="card">
+          ${fields.map((f, i) => html`
+            <${FieldRow} key=${f.key} f=${f} value=${day[f.key]}
+              onChange=${v => upd({ [f.key]: v })}
+              showDivider=${i > 0}
+            />
+          `)}
+        </div>
 
-  function buildPausesContent() {
-    pausesCard.innerHTML = "";
-    var pausesHeader = div({style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"8px"}});
-    pausesHeader.appendChild(lbl(t.pausedTime));
-    var addPauseBtn = btn({style:{background:"rgba(255,181,71,0.1)",border:"1px solid rgba(255,181,71,0.2)",borderRadius:"8px",color:"#FFB547",fontSize:"12px",cursor:"pointer",padding:"4px 10px"},onClick:function(){
-      var pauses = (S.editDay.pauses||[]).slice();
-      pauses.push({start:"",end:""});
-      S.editDay = Object.assign({},S.editDay,{pauses:pauses});
-      buildPausesContent();
-      var newBk = calcBreakdown(S.editDay, S.settings);
-      bkContainer.innerHTML = "";
-      if (newBk) { var newEl = BreakdownEl(newBk, t, S.settings); if (newEl) bkContainer.appendChild(newEl); }
-    }},["+ Añadir"]);
-    pausesHeader.appendChild(addPauseBtn);
-    pausesCard.appendChild(pausesHeader);
+        <div class="card">
+          <div style=${{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:"8px" }}>
+            <${Lbl}>${t.pausedTime}<//>
+            <button
+              style=${{ background:"rgba(255,181,71,0.1)", border:"1px solid rgba(255,181,71,0.2)", borderRadius:"8px", color:"#FFB547", fontSize:"12px", cursor:"pointer", padding:"4px 10px" }}
+              onClick=${addPause}
+            >${t.pauseAdd}</button>
+          </div>
+          ${(day.pauses || []).length === 0
+            ? html`<div style=${{ fontSize:"13px", color:"rgba(238,238,245,0.38)", padding:"6px 0" }}>${t.pauseNone}</div>`
+            : (day.pauses || []).map((pause, idx) => html`
+              <div key=${idx} style=${{ marginBottom:"8px", ...(idx > 0 ? { borderTop:"1px solid rgba(255,255,255,0.07)", paddingTop:"8px" } : {}) }}>
+                <div style=${{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:"6px" }}>
+                  <span style=${{ fontSize:"12px", fontWeight:"600", color:"#FFB547" }}>${"⏸ " + t.pauseTitle + " " + (idx + 1)}</span>
+                  <button
+                    style=${{ background:"transparent", border:"none", color:"rgba(238,238,245,0.38)", fontSize:"16px", cursor:"pointer", padding:"0" }}
+                    onClick=${() => removePause(idx)}
+                  >×</button>
+                </div>
+                <div style=${{ display:"flex", gap:"10px" }}>
+                  ${["start", "end"].map(field => html`
+                    <div key=${field} style=${{ flex:"1" }}>
+                      <div style=${{ fontSize:"10px", fontWeight:"600", letterSpacing:"0.07em", textTransform:"uppercase", color:"rgba(238,238,245,0.38)", marginBottom:"4px" }}>
+                        ${field === "start" ? t.pauseStart : t.pauseEnd}
+                      </div>
+                      <input type="time" class="time-inp"
+                        value=${pause[field] || ""}
+                        style=${{ width:"100%", background:"rgba(255,255,255,0.05)", border:"1px solid rgba(255,255,255,0.07)", borderRadius:"8px", padding:"8px 10px", textAlign:"left" }}
+                        onChange=${e => updatePauseField(idx, field, e.target.value || "")}
+                      />
+                    </div>
+                  `)}
+                </div>
+              </div>
+            `)
+          }
+        </div>
 
-    var pauses = (S.editDay.pauses||[]);
-    if (pauses.length === 0) {
-      pausesCard.appendChild(div({style:{fontSize:"13px",color:"rgba(238,238,245,0.38)",padding:"6px 0"}},["Sin pausas registradas"]));
-    } else {
-      pauses.forEach(function(pause, idx) {
-        var pRow = div({style:{marginBottom:"8px"}});
-        if (idx > 0) { pRow.style.borderTop = "1px solid rgba(255,255,255,0.07)"; pRow.style.paddingTop = "8px"; }
+        ${bk && html`<${Breakdown} bk=${bk} t=${t} settings=${settings}/>`}
 
-        var pTop = div({style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"6px"}});
-        pTop.appendChild(span({style:{fontSize:"12px",fontWeight:"600",color:"#FFB547"}},["⏸ Pausa "+(idx+1)]));
-        var delBtn = btn({style:{background:"transparent",border:"none",color:"rgba(238,238,245,0.38)",fontSize:"16px",cursor:"pointer",padding:"0"},onClick:function(){
-          var newPauses = (S.editDay.pauses||[]).filter(function(_,i){return i!==idx;});
-          S.editDay = Object.assign({},S.editDay,{pauses:newPauses});
-          buildPausesContent();
-          var newBk = calcBreakdown(S.editDay, S.settings);
-          bkContainer.innerHTML = "";
-          if (newBk) { var newEl = BreakdownEl(newBk, t, S.settings); if (newEl) bkContainer.appendChild(newEl); }
-        }},["×"]);
-        pTop.appendChild(delBtn);
-        pRow.appendChild(pTop);
+        <${Btn} kind="p" style=${{ width:"100%", marginTop:"12px" }} onClick=${upsertDay}>${t.saveChanges}<//>
+      </div>
+    </div>
+  `;
+}
 
-        var pTimes = div({style:{display:"flex",gap:"10px"}});
-        ["start","end"].forEach(function(field) {
-          var pField = div({style:{flex:"1"}});
-          pField.appendChild(div({style:{fontSize:"10px",fontWeight:"600",letterSpacing:"0.07em",textTransform:"uppercase",color:"rgba(238,238,245,0.38)",marginBottom:"4px"}},
-            [field==="start"?"Inicio":"Fin"]));
-          var pi = inp({type:"time","class":"time-inp",value:pause[field]||"",style:{width:"100%",background:"rgba(255,255,255,0.05)",border:"1px solid rgba(255,255,255,0.07)",borderRadius:"8px",padding:"8px 10px",textAlign:"left",pointerEvents:"none"}});
-          pi.addEventListener("change",function(e){
-            var newPauses = (S.editDay.pauses||[]).slice();
-            newPauses[idx] = Object.assign({},newPauses[idx],{[field]:e.target.value||""});
-            S.editDay = Object.assign({},S.editDay,{pauses:newPauses});
-            var newBk = calcBreakdown(S.editDay, S.settings);
-            bkContainer.innerHTML = "";
-            if (newBk) { var newEl = BreakdownEl(newBk, t, S.settings); if (newEl) bkContainer.appendChild(newEl); }
-          });
-          pField.addEventListener("click",function(){pi.style.pointerEvents="auto";pi.focus();pi.click();});
-          pField.style.cursor="pointer";
-          pField.appendChild(pi);
-          pTimes.appendChild(pField);
-        });
-        pRow.appendChild(pTimes);
-        pausesCard.appendChild(pRow);
-      });
+function FieldRow({ f, value, onChange, showDivider }) {
+  const inputRef = useRef(null);
+  const focusInput = () => { inputRef.current?.focus(); inputRef.current?.click(); };
+  return html`
+    ${showDivider && html`<div class="div-line"/>`}
+    <div class="row" style=${{ cursor:"pointer" }} onClick=${focusInput}>
+      <${Lbl}>${f.label}<//>
+      <input ref=${inputRef} type=${f.type}
+        class=${f.type === "time" ? "time-inp" : "date-inp"}
+        value=${value || ""}
+        onChange=${e => onChange(e.target.value || null)}
+      />
+    </div>
+  `;
+}
+
+// ── App root ──────────────────────────────────────────────────────────────────
+function App() {
+  const [S, _setS] = useState(() => ({
+    data: stLoad(DATA_KEY, DEF_DATA),
+    settings: stLoad(SETT_KEY, DEF_SETT),
+    view: "projects",
+    activeProjId: null,
+    editDay: null,
+    showNewProj: false,
+    confirmDelete: null,
+    renameProj: null,
+    commentDay: null,
+    storageError: null,
+    clock: nowTime()
+  }));
+
+  const set = patch => _setS(s => Object.assign({}, s, patch));
+
+  const persist = data => {
+    const stamped = Object.assign({}, data, { version: DATA_VERSION });
+    const result = stSave(DATA_KEY, stamped);
+    _setS(s => Object.assign({}, s, { data: stamped, storageError: result.ok ? s.storageError : result.errorType }));
+  };
+
+  const persistSett = sett => {
+    const result = stSave(SETT_KEY, sett);
+    _setS(s => Object.assign({}, s, { settings: sett, storageError: result.ok ? s.storageError : result.errorType }));
+  };
+
+  // The Settings view can request an import via S._importData; apply it here.
+  useEffect(() => {
+    if (S._importData) {
+      persist(S._importData.data);
+      if (S._importData.settings) persistSett(Object.assign({}, DEF_SETT, S._importData.settings));
+      _setS(s => Object.assign({}, s, { _importData: null }));
     }
-  }
+  }, [S._importData]);
 
-  buildPausesContent();
-  sec.appendChild(pausesCard);
-  sec.appendChild(bkContainer);
+  useEffect(() => {
+    const id = setInterval(() => _setS(s => Object.assign({}, s, { clock: nowTime() })), 15000);
+    return () => clearInterval(id);
+  }, []);
 
-  var saveBtn = Btn("p", t.saveChanges, function() {
-    if (!S.editDay.date) return;
-    var d = S.editDay;
-    upsertDay(d._pid, {id:d.id,date:d.date,workStart:d.workStart,lunchStart:d.lunchStart,lunchEnd:d.lunchEnd,workEnd:d.workEnd,comment:d.comment||null,applyLunchPenalty:d.applyLunchPenalty,pauses:d.pauses||[]});
-    set({editDay:null});
-  }, {width:"100%",marginTop:"12px"});
-  sec.appendChild(saveBtn);
-  root.appendChild(sec);
-  return root;
+  const t = LANGS[S.settings.lang] || LANGS.es;
+
+  let view;
+  if (S.view === "settings") view = html`<${SettingsView} S=${S} set=${set} persistSett=${persistSett} t=${t}/>`;
+  else if (S.editDay)        view = html`<${EditDayView} S=${S} set=${set} persist=${persist} t=${t}/>`;
+  else if (S.view === "report"  && S.activeProjId) view = html`<${ReportView} S=${S} set=${set} t=${t}/>`;
+  else if (S.view === "project" && S.activeProjId) view = html`<${ProjectView} S=${S} set=${set} persist=${persist} t=${t}/>`;
+  else                                              view = html`<${ProjectsView} S=${S} set=${set} persist=${persist} t=${t}/>`;
+
+  return html`
+    <${Fragment}>
+      ${view}
+      <${StorageErrorToast} error=${S.storageError} t=${t} onDismiss=${() => set({ storageError: null })}/>
+    <//>
+  `;
 }
 
-function renderReport() {
-  var t = LANGS[S.settings.lang] || LANGS.es;
-  var proj = S.data.projects.find(function(p) { return p.id === S.activeProjId; });
-  if (!proj) return renderProjects();
-  var days = proj.days.filter(function(d) { return d.workStart; }).sort(function(a,b) { return a.date.localeCompare(b.date); });
-  var bks = days.map(function(d) { return calcBreakdown(d, S.settings); }).filter(Boolean);
-  var tot = {total:0,normal:0,extra:0,bonus:0};
-  bks.forEach(function(b) { tot.total+=b.total; tot.normal+=b.normal; tot.extra+=b.extra; tot.bonus+=b.bonus; });
-
-  var root = div({"class":"app"});
-  var hdr = div({"class":"hdr"});
-  hdr.appendChild(Btn("g", t.backProj, function() { set({view:"project"}); }));
-  hdr.appendChild(Btn("g", "⚙", function() { set({view:"settings"}); }));
-  root.appendChild(hdr);
-
-  var sec = div({"class":"sec"});
-  sec.appendChild(el("h2", {"class":"fd", style:{fontSize:"24px",margin:"0 0 2px"}}, [proj.name]));
-  sec.appendChild(lbl(days.length+" "+t.days));
-
-  var grid = div({"class":"grid2", style:{margin:"16px 0 12px"}});
-  [[t.normalHours,fmtDur(tot.normal),"#5ED5B7"],[t.overtime,tot.extra>0?fmtDur(tot.extra):"--","#FF5C3A"],[t.noLunchBonus,tot.bonus>0?"+"+fmtH(tot.bonus):"--","#A78BFF"],[t.totalHours,fmtDur(tot.total),"#EEEEF5"]].forEach(function(item) {
-    var c = div({"class":"card", style:{textAlign:"center",marginBottom:"0"}});
-    c.appendChild(div({style:{marginBottom:"5px"}}, [lbl(item[0])]));
-    c.appendChild(div({"class":"mono", style:{fontSize:"20px",color:item[2]}}, [item[1]]));
-    grid.appendChild(c);
-  });
-  sec.appendChild(grid);
-
-  // Export report button
-  var expRepBtn = Btn("g", t.exportReport, function() {
-    var text = generateReportText(proj, S.settings);
-    var blob = new Blob([text], {type:"text/plain;charset=utf-8"});
-    var url = URL.createObjectURL(blob);
-    var a = document.createElement("a");
-    a.href = url;
-    a.download = proj.name.replace(/\s+/g,"_") + "_informe.txt";
-    a.click();
-    URL.revokeObjectURL(url);
-  }, {width:"100%",fontSize:"14px",marginBottom:"12px"});
-  sec.appendChild(expRepBtn);
-
-  if (days.length === 0) {
-    var empty = div({style:{textAlign:"center",padding:"40px 0",color:"rgba(238,238,245,0.38)"}});
-    empty.appendChild(div({style:{fontSize:"36px",marginBottom:"10px"}}, ["📊"]));
-    empty.appendChild(div(null, [t.noCompletedDays]));
-    sec.appendChild(empty);
-  } else {
-    days.forEach(function(day, i) {
-      var bk = bks[i];
-      var c = div({"class":"card", style:{cursor:"pointer"}});
-      c.addEventListener("click", function() { set({editDay:Object.assign({},day,{_pid:proj.id,_isNew:false})}); });
-      var top = div({style:{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:"10px"}});
-      var left = div(null);
-      left.appendChild(div({style:{fontSize:"14px",fontWeight:"600",textTransform:"capitalize",marginBottom:"5px"}}, [fmtDate(day.date, S.settings.lang)]));
-      left.appendChild(Badge(getDayStatus(day), t));
-      var right = div({style:{textAlign:"right"}});
-      right.appendChild(div({"class":"mono", style:{fontSize:"22px",color:bk?"#5ED5B7":"rgba(238,238,245,0.38)"}}, [bk?fmtDur(bk.total):"--"]));
-      if (bk && bk.extra>0) right.appendChild(div({"class":"mono", style:{fontSize:"12px",color:"#FF5C3A"}}, ["+"+fmtDur(bk.extra)+" extra"]));
-      top.appendChild(left); top.appendChild(right); c.appendChild(top);
-      var chips = div({style:{display:"flex",gap:"6px",flexWrap:"wrap",marginBottom:"6px"}});
-      var ch1=Chip("Entrada",day.workStart,"#EEEEF5","rgba(255,255,255,0.05)"); if(ch1) chips.appendChild(ch1);
-      if (day.lunchStart) { var ch=Chip("Comida",day.lunchStart+"–"+(day.lunchEnd||"?"),"#FFB547","rgba(255,181,71,0.1)"); if(ch) chips.appendChild(ch); }
-      var ch2=Chip("Salida",day.workEnd,"#5ED5B7","rgba(94,213,183,0.1)"); if(ch2) chips.appendChild(ch2);
-      c.appendChild(chips);
-      if (bk) { var bkEl=BreakdownEl(bk,t,S.settings); if(bkEl) c.appendChild(bkEl); }
-      c.appendChild(div({style:{fontSize:"11px",color:"rgba(238,238,245,0.38)",marginTop:"8px",textAlign:"right"}}, [t.editTap+" →"]));
-      sec.appendChild(c);
-    });
-  }
-  root.appendChild(sec);
-  return root;
-}
-
-function renderProject() {
-  var t = LANGS[S.settings.lang] || LANGS.es;
-  var proj = S.data.projects.find(function(p) { return p.id === S.activeProjId; });
-  if (!proj) return renderProjects();
-  var todayDay = proj.days.find(function(d) { return d.date === todayStr(); }) || null;
-  var todaySt = getDayStatus(todayDay);
-  var todayBK = calcBreakdown(todayDay, S.settings);
-  var past = proj.days.filter(function(d) { return d.date !== todayStr(); }).sort(function(a,b) { return b.date.localeCompare(a.date); });
-  var totalMin = proj.days.reduce(function(acc,d) { var b=calcBreakdown(d,S.settings); return acc+(b?b.total:0); }, 0);
-
-  var root = div({"class":"app"});
-
-  // Rename popup
-  if (S.renameProj !== null) {
-    var ov = div({"class":"overlay"});
-    var pop = div({"class":"card popup"});
-    pop.appendChild(el("div",{"class":"fd",style:{fontSize:"18px",marginBottom:"14px"}}, [t.rename]));
-    var ri = inp({"class":"input-std", value:S.renameProj||"", style:{marginBottom:"14px"}});
-    ri.addEventListener("input", function(e) { S.renameProj = e.target.value; });
-    ri.addEventListener("keydown", function(e) {
-      if (e.key==="Enter" && S.renameProj && S.renameProj.trim()) {
-        persist(Object.assign({},S.data,{projects:S.data.projects.map(function(p){return p.id===proj.id?Object.assign({},p,{name:S.renameProj.trim()}):p;})}));
-        set({renameProj:null});
-      }
-      if (e.key==="Escape") set({renameProj:null});
-    });
-    pop.appendChild(ri);
-    var row = div({"class":"flex-row"});
-    var sv = Btn("p", t.save, function() {
-      if (!S.renameProj || !S.renameProj.trim()) return;
-      persist(Object.assign({},S.data,{projects:S.data.projects.map(function(p){return p.id===proj.id?Object.assign({},p,{name:S.renameProj.trim()}):p;})}));
-      set({renameProj:null});
-    }, {flex:"1"});
-    var ca = Btn("g", t.cancel, function() { set({renameProj:null}); }, {flex:"1"});
-    row.appendChild(sv); row.appendChild(ca); pop.appendChild(row);
-    ov.appendChild(pop); root.appendChild(ov);
-    setTimeout(function(){ ri.focus(); }, 50);
-  }
-
-  renderCommentPopup(root);
-
-  var hdr = div({"class":"hdr"});
-  hdr.appendChild(Btn("g", t.backProjects, function() { set({view:"projects"}); }));
-  var hdrRight = div({"class":"flex-row"});
-  hdrRight.appendChild(Btn("g", "⚙", function() { set({view:"settings"}); }));
-  var repBtn = Btn("g", t.report, function() { set({view:"report"}); });
-  repBtn.style.color = "#FF5C3A"; repBtn.style.borderColor = "rgba(255,92,58,0.2)";
-  hdrRight.appendChild(repBtn); hdr.appendChild(hdrRight); root.appendChild(hdr);
-
-  var projHead = div({style:{padding:"0 20px 16px"}});
-  var nameRow = div({style:{display:"flex",alignItems:"center",gap:"10px",marginBottom:"4px"}});
-  nameRow.appendChild(el("h2",{"class":"fd",style:{fontSize:"26px",margin:"0"}}, [proj.name]));
-  nameRow.appendChild(btn({style:{background:"rgba(255,255,255,0.07)",border:"1px solid rgba(255,255,255,0.07)",borderRadius:"8px",color:"rgba(238,238,245,0.62)",fontSize:"13px",cursor:"pointer",padding:"4px 9px",lineHeight:"1"},"onClick":function(){set({renameProj:proj.name});}},["✎"]));
-  projHead.appendChild(nameRow);
-  projHead.appendChild(lbl(proj.days.length+" "+t.days+" · "+fmtDur(totalMin)+" "+t.total.toLowerCase()));
-  root.appendChild(projHead);
-
-  var sec = div({"class":"sec"});
-  var locale = S.settings.lang==="en"?"en-GB":S.settings.lang==="de"?"de-DE":"es-ES";
-  var todayHeader = div({style:{marginBottom:"10px"}});
-  todayHeader.appendChild(lbl(t.today+" · "+new Date().toLocaleDateString(locale,{day:"numeric",month:"long"})));
-  sec.appendChild(todayHeader);
-
-  var dayCard = div({"class":"card"+(todaySt!=="idle"?" card-on":"")});
-  var clockRow = div({style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"14px"}});
-  clockRow.appendChild(div({"class":"mono", style:{fontSize:"40px",letterSpacing:"-1px",lineHeight:"1"}}, [S.clock]));
-  var badgeRow = div({style:{display:"flex",alignItems:"center",gap:"8px"}});
-  badgeRow.appendChild(Badge(todaySt, t));
-  if (todaySt !== "idle") {
-    var editBtnEl = btn({style:{background:"rgba(255,255,255,0.07)",border:"1px solid rgba(255,255,255,0.07)",borderRadius:"8px",color:"rgba(238,238,245,0.62)",fontSize:"15px",cursor:"pointer",padding:"4px 9px",lineHeight:"1"},"onClick":function(){
-      var base = todayDay || {id:uid(),date:todayStr(),workStart:null,lunchStart:null,lunchEnd:null,workEnd:null};
-      set({editDay:Object.assign({},base,{_pid:proj.id,_isNew:!todayDay})});
-    }}, [t.edit]);
-    badgeRow.appendChild(editBtnEl);
-  }
-  clockRow.appendChild(badgeRow); dayCard.appendChild(clockRow);
-
-  if (todayDay) {
-    var chips = div({style:{display:"flex",gap:"6px",flexWrap:"wrap",marginBottom:"12px"}});
-    var c1=Chip("Entrada",todayDay.workStart); if(c1) chips.appendChild(c1);
-    if (todayDay.lunchStart) { var c=Chip("Comida",todayDay.lunchStart+"–"+(todayDay.lunchEnd||"?"),"#FFB547","rgba(255,181,71,0.1)"); if(c) chips.appendChild(c); }
-    if (todayDay.workEnd) { var c2=Chip("Salida",todayDay.workEnd,"#5ED5B7","rgba(94,213,183,0.1)"); if(c2) chips.appendChild(c2); }
-    dayCard.appendChild(chips);
-  }
-
-  if (S.settings.lunchPenaltyH > 0 && todayDay) {
-    var isChecked = todayDay.applyLunchPenalty === true;
-    var cbRow = div({style:{display:"flex",alignItems:"center",gap:"10px",marginBottom:"14px",cursor:"pointer",userSelect:"none"},"onClick":function(){
-      upsertDay(proj.id, Object.assign({},todayDay,{applyLunchPenalty:!isChecked}));
-    }});
-    var cbBox = div({"class":"cb-box",style:{border:"2px solid "+(isChecked?"#5ED5B7":"rgba(255,255,255,0.07)"),background:isChecked?"rgba(94,213,183,0.1)":"transparent"}});
-    if (isChecked) cbBox.appendChild(span({style:{fontSize:"12px",color:"#5ED5B7"}}, ["✓"]));
-    cbRow.appendChild(cbBox);
-    cbRow.appendChild(span({style:{fontSize:"13px",color:isChecked?"#5ED5B7":"rgba(238,238,245,0.62)"}}, [t.applyPenalty+" (+"+S.settings.lunchPenaltyH+"h)"]));
-    dayCard.appendChild(cbRow);
-  }
-
-  var actRow = div({"class":"flex-row", style:{flexWrap:"wrap"}});
-  if (todaySt==="idle") { var b=Btn("p",t.start,function(){tapAction("start");},{flex:"1"}); actRow.appendChild(b); }
-  if (todaySt==="working") {
-    var b1=Btn("w",t.lunch,function(){tapAction("lunch");},{flex:"1"});
-    var b2=Btn("w",t.pause,function(){tapAction("pause");},{flex:"1"});
-    var b3=Btn("s",t.end,function(){tapAction("end");},{flex:"1"});
-    actRow.appendChild(b1); actRow.appendChild(b2); actRow.appendChild(b3);
-  }
-  if (todaySt==="lunch") { var b=Btn("t",t.resume,function(){tapAction("resume");},{flex:"1"}); actRow.appendChild(b); }
-  if (todaySt==="paused") { var b=Btn("t",t.resumeWork,function(){tapAction("resumePause");},{flex:"1"}); actRow.appendChild(b); }
-  if (todaySt==="resumed") { var b=Btn("s",t.end,function(){tapAction("end");},{flex:"1"}); actRow.appendChild(b); }
-  if (todaySt==="complete") actRow.appendChild(div({style:{width:"100%",textAlign:"center",color:"rgba(238,238,245,0.38)",fontSize:"13px",marginTop:"4px"}}, [t.complete]));
-  if (todayBK) {
-    var hrs = div({style:{marginBottom:"12px",display:"flex",alignItems:"center",justifyContent:"space-between"}});
-    var hrsLeft = div(null);
-    hrsLeft.appendChild(lbl(t.workedToday+" · "));
-    hrsLeft.appendChild(span({"class":"mono",style:{fontSize:"15px",color:"#5ED5B7"}}, [fmtDur(todayBK.normal)]));
-    if (todayBK.extra>0) hrsLeft.appendChild(span({"class":"mono",style:{fontSize:"13px",color:"#FF5C3A",marginLeft:"8px"}}, ["+"+fmtDur(todayBK.extra)+" extra"]));
-    if (todayBK.pausedMin>0) hrsLeft.appendChild(span({"class":"mono",style:{fontSize:"13px",color:"#FFB547",marginLeft:"8px"}}, ["−"+fmtDur(todayBK.pausedMin)+" pausa"]));
-    if (todayBK.bonus>0) hrsLeft.appendChild(span({"class":"mono",style:{fontSize:"13px",color:"#A78BFF",marginLeft:"8px"}}, ["+"+fmtH(todayBK.bonus)+" Penalty Lunch"]));
-    hrs.appendChild(hrsLeft);
-    if (todayDay) hrs.appendChild(CommentBtn(proj.id, todayDay, t));
-    dayCard.appendChild(hrs);
-  } else if (todayDay && todaySt !== "idle") {
-    var cmtRow = div({style:{marginBottom:"12px",display:"flex",justifyContent:"flex-end"}});
-    cmtRow.appendChild(CommentBtn(proj.id, todayDay, t));
-    dayCard.appendChild(cmtRow);
-  }
-
-  dayCard.appendChild(actRow);
-  sec.appendChild(dayCard);
-
-  var addBtn = Btn("g", t.addManual, function() {
-    set({editDay:{id:uid(),date:"",workStart:null,lunchStart:null,lunchEnd:null,workEnd:null,_pid:proj.id,_isNew:true}});
-  }, {width:"100%",fontSize:"13px"});
-  sec.appendChild(addBtn);
-
-  if (past.length > 0) {
-    var pastSec = div({style:{padding:"24px 20px 0"}});
-    pastSec.appendChild(div({style:{marginBottom:"12px"}}, [lbl(t.pastDays)]));
-    past.forEach(function(day) {
-      var bk = calcBreakdown(day, S.settings);
-      var c = div({"class":"card",style:{cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center"}});
-      c.addEventListener("click", function() { set({editDay:Object.assign({},day,{_pid:proj.id,_isNew:false})}); });
-      var left = div(null);
-      left.appendChild(div({style:{fontSize:"14px",fontWeight:"600",textTransform:"capitalize",marginBottom:"5px"}}, [fmtDateShort(day.date,S.settings.lang)]));
-      left.appendChild(Badge(getDayStatus(day),t));
-      var right = div({style:{textAlign:"right"}});
-      right.appendChild(div({"class":"mono",style:{fontSize:"20px",color:bk?"#5ED5B7":"rgba(238,238,245,0.38)"}}, [bk?fmtDur(bk.total):"--"]));
-      if (bk && bk.extra>0) right.appendChild(div({"class":"mono",style:{fontSize:"11px",color:"#FF5C3A"}}, ["+"+fmtDur(bk.extra)]));
-      right.appendChild(div({style:{fontSize:"10px",color:"rgba(238,238,245,0.38)",marginTop:"2px"}}, ["editar →"]));
-      if (day.comment) right.appendChild(span({style:{fontSize:"13px",color:"#A78BFF",display:"block",marginTop:"4px"}},["💬"]));
-      c.appendChild(left); c.appendChild(right); pastSec.appendChild(c);
-    });
-    root.appendChild(sec); root.appendChild(pastSec);
-    return root;
-  }
-  root.appendChild(sec);
-  return root;
-}
-
-function renderProjects() {
-  var t = LANGS[S.settings.lang] || LANGS.es;
-  var root = div({"class":"app"});
-
-  // Confirm delete overlay
-  if (S.confirmDelete) {
-    var ov = div({"class":"overlay"});
-    var pop = div({"class":"card popup"});
-    pop.appendChild(el("div",{"class":"fd",style:{fontSize:"18px",marginBottom:"8px"}},[t.deleteProject]));
-    pop.appendChild(div({style:{color:"rgba(238,238,245,0.38)",fontSize:"14px",marginBottom:"20px"}},[t.deleteWarning]));
-    var row = div({"class":"flex-row"});
-    var id = S.confirmDelete;
-    var db = Btn("d", t.delete, function() {
-      var nd = Object.assign({},S.data,{projects:S.data.projects.filter(function(p){return p.id!==id;})});
-      persist(nd);
-      set({confirmDelete:null, activeProjId:S.activeProjId===id?null:S.activeProjId, view:S.activeProjId===id?"projects":S.view});
-    }, {flex:"1"});
-    var cb = Btn("g", t.cancel, function() { set({confirmDelete:null}); }, {flex:"1"});
-    row.appendChild(db); row.appendChild(cb); pop.appendChild(row);
-    ov.appendChild(pop); root.appendChild(ov);
-  }
-
-  var hdr = div({"class":"hdr",style:{flexDirection:"column",alignItems:"flex-start",paddingBottom:"16px"}});
-  var hdrTop = div({style:{display:"flex",justifyContent:"space-between",alignItems:"flex-end",width:"100%"}});
-  var hdrLeft = div(null);
-  hdrLeft.appendChild(el("h1",{"class":"fd",style:{fontSize:"34px",margin:"0",letterSpacing:"-0.5px"}},[t.projects]));
-  var setBtn = Btn("g","⚙",function(){set({view:"settings"});},{padding:"11px 15px",fontSize:"18px"});
-  hdrTop.appendChild(hdrLeft); hdrTop.appendChild(setBtn); hdr.appendChild(hdrTop); root.appendChild(hdr);
-
-  var sec = div({"class":"sec"});
-
-  if (S.data.projects.length === 0 && !S.showNewProj) {
-    var empty = div({style:{textAlign:"center",padding:"48px 0 32px",color:"rgba(238,238,245,0.38)"}});
-    empty.appendChild(div({style:{fontSize:"44px",marginBottom:"12px"}},["⏱"]));
-    empty.appendChild(div({style:{fontSize:"16px",fontWeight:"600",color:"rgba(238,238,245,0.62)",marginBottom:"6px"}},[t.noProjects]));
-    empty.appendChild(div(null,[t.noProjectsHint]));
-    sec.appendChild(empty);
-  }
-
-  S.data.projects.slice().reverse().forEach(function(p) {
-    var tDay = p.days.find(function(d){return d.date===todayStr();});
-    var tSt = getDayStatus(tDay);
-    var isTracking = tSt!=="idle" && tSt!=="complete";
-    var tBK = calcBreakdown(tDay, S.settings);
-    var totalMin = p.days.filter(function(d){return d.workStart;}).reduce(function(acc,d){var b=calcBreakdown(d,S.settings);return acc+(b?b.total:0);},0);
-    var c = div({"class":"card"+(isTracking?" card-on":""),style:{cursor:"pointer"}});
-    c.addEventListener("click", function() { set({activeProjId:p.id, view:"project"}); });
-    var inner = div({style:{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}});
-    var left = div({style:{flex:"1"}});
-    var nameRow = div({style:{display:"flex",alignItems:"center",gap:"8px",marginBottom:"10px"}});
-    nameRow.appendChild(div({style:{fontSize:"16px",fontWeight:"700"}},[p.name]));
-    if (isTracking||tSt==="complete") nameRow.appendChild(Badge(tSt,t));
-    left.appendChild(nameRow);
-    var stats = div({style:{display:"flex",gap:"20px"}});
-    function addStat(label,val,color) {
-      var s=div(null);
-      s.appendChild(div({style:{marginBottom:"3px"}},[lbl(label)]));
-      s.appendChild(div({"class":"mono",style:{fontSize:"20px",color:color||"#EEEEF5"}},[String(val)]));
-      stats.appendChild(s);
-    }
-    addStat(t.days, p.days.filter(function(d){return d.workStart;}).length);
-    addStat(t.total, fmtDur(totalMin), totalMin>0?"#5ED5B7":"rgba(238,238,245,0.38)");
-    if (isTracking&&tBK) addStat(t.today, fmtDur(tBK.net), "#5ED5B7");
-    left.appendChild(stats); inner.appendChild(left);
-    var delBtn = btn({style:{background:"transparent",border:"none",color:"rgba(238,238,245,0.38)",fontSize:"20px",cursor:"pointer",padding:"0 0 0 8px"},"onClick":function(e){e.stopPropagation();set({confirmDelete:p.id});}},["×"]);
-    inner.appendChild(delBtn); c.appendChild(inner); sec.appendChild(c);
-  });
-
-  if (S.showNewProj) {
-    var np = div({"class":"card"});
-    np.appendChild(div({style:{marginBottom:"10px"}},[lbl(t.createProject)]));
-    var ni = inp({"class":"input-std",placeholder:t.projectName,value:S.newProjName||"",style:{marginBottom:"12px"}});
-    ni.addEventListener("input",function(e){S.newProjName=e.target.value;});
-    ni.addEventListener("keydown",function(e){if(e.key==="Enter"){createProj();}});
-    var row=div({"class":"flex-row"});
-    row.appendChild(Btn("g",t.cancel,function(){set({showNewProj:false,newProjName:""}); },{flex:"1"}));
-    row.appendChild(Btn("p",t.create,createProj,{flex:"1"}));
-    np.appendChild(ni); np.appendChild(row); sec.appendChild(np);
-    setTimeout(function(){ni.focus();},50);
-  } else {
-    sec.appendChild(Btn("p",t.newProject,function(){set({showNewProj:true})},{width:"100%",fontSize:"15px"}));
-  }
-  root.appendChild(sec);
-  return root;
-}
-
-function createProj() {
-  if (!S.newProjName || !S.newProjName.trim()) return;
-  var nd = Object.assign({},S.data,{projects:S.data.projects.concat([{id:uid(),name:S.newProjName.trim(),days:[],createdAt:todayStr()}])});
-  persist(nd);
-  set({showNewProj:false,newProjName:""});
-}
-
-// ── Render ────────────────────────────────────────────────────────────────────
-function render() {
-  var node;
-  if (S.view==="settings") node = renderSettings();
-  else if (S.editDay) node = renderEditDay();
-  else if (S.view==="report" && S.activeProjId) node = renderReport();
-  else if (S.view==="project" && S.activeProjId) node = renderProject();
-  else node = renderProjects();
-  var app = document.getElementById("app");
-  app.innerHTML = "";
-  app.appendChild(node);
-}
-
-render();
+render(html`<${App}/>`, document.getElementById("app"));
 </script>
 </body>
 </html>
